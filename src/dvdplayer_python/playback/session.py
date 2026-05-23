@@ -1225,7 +1225,8 @@ class PlaybackSession:
         value = self.get_property("sid")
         return int(value) if isinstance(value, int) else None
 
-    def subtitle_tracks(self) -> list[dict[str, Any]]:
+    def _tracks_by_type(self, track_type: str) -> list[dict[str, Any]]:
+        """Return a normalized list of mpv tracks of the given type ("audio", "sub", "video")."""
         if self.backend != "mpv":
             return []
         tracks = self.get_property("track-list")
@@ -1233,7 +1234,7 @@ class PlaybackSession:
             return []
         out: list[dict[str, Any]] = []
         for track in tracks:
-            if not isinstance(track, dict) or track.get("type") != "sub":
+            if not isinstance(track, dict) or track.get("type") != track_type:
                 continue
             track_id = track.get("id")
             if not isinstance(track_id, (int, float)):
@@ -1250,6 +1251,12 @@ class PlaybackSession:
                 label = f"TRACK {int(track_id)}"
             out.append({"id": int(track_id), "label": label, "lang": lang})
         return out
+
+    def audio_tracks(self) -> list[dict[str, Any]]:
+        return self._tracks_by_type("audio")
+
+    def subtitle_tracks(self) -> list[dict[str, Any]]:
+        return self._tracks_by_type("sub")
 
     def show_text(self, text: str, duration_ms: int = 2000) -> None:
         if self.backend != "mpv":
@@ -1338,6 +1345,9 @@ class PlaybackSession:
 
     def show_subtitle_menu_overlay(self, selected: int, items: list[str]) -> None:
         self._show_simple_menu_overlay("SUBTITLE MENU", selected, items)
+
+    def show_audio_menu_overlay(self, selected: int, items: list[str]) -> None:
+        self._show_simple_menu_overlay("AUDIO MENU", selected, items)
 
     def _show_simple_menu_overlay(self, title: str, selected: int, items: list[str]) -> None:
         if self.backend != "mpv":

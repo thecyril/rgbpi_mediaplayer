@@ -69,23 +69,29 @@ OVERLAY_ACTION_INFORMATION = "information"
 OVERLAY_ACTION_RETURN_TO_BROWSER = "return_to_browser"
 OVERLAY_ACTION_SUBTITLE_OFF = "subtitle_off"
 OVERLAY_ACTION_SUBTITLE_TRACK_PREFIX = "subtitle_track:"
+OVERLAY_ACTION_AUDIO_MENU = "audio_menu"
+OVERLAY_ACTION_AUDIO_TRACK_PREFIX = "audio_track:"
 
 START_MENU_ENTRIES_DVD = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
     (OVERLAY_ACTION_DVD_MENU, "DVD MENU"),
     (OVERLAY_ACTION_CHAPTER_PREV, "CHAPTER -"),
     (OVERLAY_ACTION_CHAPTER_NEXT, "CHAPTER +"),
+    (OVERLAY_ACTION_AUDIO_MENU, "AUDIO TRACK"),
     (OVERLAY_ACTION_SUBTITLES, "ENABLE SUBTITLES"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
 ]
 START_MENU_ENTRIES_VIDEO = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
+    (OVERLAY_ACTION_AUDIO_MENU, "AUDIO TRACK"),
+    (OVERLAY_ACTION_SUBTITLES, "ENABLE SUBTITLES"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
 ]
 START_MENU_ENTRIES_PLEX = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
+    (OVERLAY_ACTION_AUDIO_MENU, "AUDIO TRACK"),
     (OVERLAY_ACTION_SUBTITLES, "ENABLE SUBTITLES"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
@@ -1054,7 +1060,7 @@ class App:
     def handle_playback_action(self, action: Action):
         if not self.playback:
             return
-        if self.playback_overlay in {"start_menu", "seek", "subtitle_menu", "information"}:
+        if self.playback_overlay in {"start_menu", "seek", "subtitle_menu", "audio_menu", "information"}:
             self._handle_playback_overlay_action(action)
             return
         if action == Action.BACK:
@@ -1102,6 +1108,48 @@ class App:
         self.playback_overlay_actions = []
         self.playback.show_seek_overlay(paused=self.playback.pause_state(), step_seconds=30)
         log_event("overlay_open", overlay=self.playback_overlay)
+
+    def _open_audio_overlay(self):
+        if not self.playback:
+            return
+        try:
+            tracks = self.playback.audio_tracks()
+        except Exception as exc:
+            self.message = MessageBox("AUDIO", "Could not read audio tracks")
+            log_event("overlay_action_failed", action_id=OVERLAY_ACTION_AUDIO_MENU, error=str(exc))
+            self._close_overlay()
+            return
+        if not tracks:
+            self.message = MessageBox("AUDIO", "No audio tracks available")
+            log_event("overlay_action_ok", action_id=OVERLAY_ACTION_AUDIO_MENU, result="no_tracks")
+            self._close_overlay()
+            return
+        valid_tracks = [track for track in tracks if isinstance(track.get("id"), (int, float))]
+        if not valid_tracks:
+            self.message = MessageBox("AUDIO", "No audio tracks available")
+            log_event("overlay_action_ok", action_id=OVERLAY_ACTION_AUDIO_MENU, result="no_valid_tracks")
+            self._close_overlay()
+            return
+        self.playback_overlay = "audio_menu"
+        self.playback_overlay_items = [str(track.get("label", "TRACK")) for track in valid_tracks]
+        self.playback_overlay_actions = []
+        for track in valid_tracks:
+            self.playback_overlay_actions.append(f"{OVERLAY_ACTION_AUDIO_TRACK_PREFIX}{int(track.get('id', -1))}")
+        current_aid = self.playback.current_audio_track()
+        focus = 0
+        if isinstance(current_aid, int):
+            for index, action_id in enumerate(self.playback_overlay_actions):
+                if action_id == f"{OVERLAY_ACTION_AUDIO_TRACK_PREFIX}{current_aid}":
+                    focus = index
+                    break
+        self.playback_overlay_focus = focus
+        self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+        log_event(
+            "overlay_open",
+            overlay=self.playback_overlay,
+            focus=self.playback_overlay_focus,
+            items=len(self.playback_overlay_items),
+        )
 
     def _open_subtitle_overlay(self):
         if not self.playback:
@@ -1275,6 +1323,8 @@ class App:
                 self.playback.step_chapter(-1)
             elif action_id == OVERLAY_ACTION_CHAPTER_NEXT:
                 self.playback.step_chapter(1)
+            elif action_id == OVERLAY_ACTION_AUDIO_MENU:
+                self._open_audio_overlay()
             elif action_id == OVERLAY_ACTION_SUBTITLES:
                 self._open_subtitle_overlay()
             elif action_id == OVERLAY_ACTION_INFORMATION:
@@ -1322,10 +1372,40 @@ class App:
                 self._execute_overlay_action(action_id)
                 if action_id == OVERLAY_ACTION_RETURN_TO_BROWSER:
                     return
-                if action_id in {OVERLAY_ACTION_SUBTITLES, OVERLAY_ACTION_INFORMATION}:
+                if action_id in {OVERLAY_ACTION_AUDIO_MENU, OVERLAY_ACTION_SUBTITLES, OVERLAY_ACTION_INFORMATION}:
                     return
                 self._close_overlay()
                 return
+        elif self.playback_overlay == "audio_menu":
+            if action == Action.UP and self.playback_overlay_items:
+                self.playback_overlay_focus = (self.playback_overlay_focus - 1) % len(self.playback_overlay_items)
+                self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                log_event("overlay_focus", overlay="audio_menu", focus=self.playback_overlay_focus)
+                return
+            if action == Action.DOWN and self.playback_overlay_items:
+                self.playback_overlay_focus = (self.playback_overlay_focus + 1) % len(self.playback_overlay_items)
+                self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                log_event("overlay_focus", overlay="audio_menu", focus=self.playback_overlay_focus)
+                return
+            if action == Action.ACCEPT:
+                action_id = self.playback_overlay_actions[self.playback_overlay_focus] if self.playback_overlay_actions else ""
+                source_kind = self.playback_source.kind.value if self.playback_source else "unknown"
+                try:
+                    if action_id.startswith(OVERLAY_ACTION_AUDIO_TRACK_PREFIX):
+                        track_id = int(action_id[len(OVERLAY_ACTION_AUDIO_TRACK_PREFIX):])
+                        self.playback.set_audio_track(track_id)
+                        log_event("overlay_action_ok", action_id=action_id, source_kind=source_kind, track_id=track_id)
+                    else:
+                        raise RuntimeError(f"unknown audio overlay action: {action_id}")
+                except Exception as exc:
+                    log_event("overlay_action_failed", action_id=action_id, error=str(exc))
+                    self.message = MessageBox("AUDIO", "Could not switch audio track")
+                self._close_overlay()
+                return
+            if action in {Action.BACK, Action.SELECT, Action.START}:
+                self._close_overlay()
+                return
+            return
         elif self.playback_overlay == "subtitle_menu":
             if action == Action.UP and self.playback_overlay_items:
                 self.playback_overlay_focus = (self.playback_overlay_focus - 1) % len(self.playback_overlay_items)
@@ -2533,7 +2613,7 @@ class App:
             youtube_screen_name=youtube_state.screen_name,
             youtube_queue_size=max(youtube_state.queue_size, len(youtube_queue)),
             youtube_receiver_healthy=bool(youtube_state.receiver_healthy),
-            overlay_focus=self.playback_overlay_focus if self.playback_overlay in {"start_menu", "seek", "subtitle_menu"} else None,
+            overlay_focus=self.playback_overlay_focus if self.playback_overlay in {"start_menu", "seek", "subtitle_menu", "audio_menu"} else None,
             overlay_items=list(self.playback_overlay_items),
             active_tty=self.active_tty,
             items=items,
