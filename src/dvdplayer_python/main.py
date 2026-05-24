@@ -10,7 +10,7 @@ import fcntl
 import struct
 import threading
 from glob import glob
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +64,8 @@ OVERLAY_ACTION_TOGGLE_PAUSE = "toggle_pause"
 OVERLAY_ACTION_DVD_MENU = "dvd_menu"
 OVERLAY_ACTION_CHAPTER_PREV = "chapter_prev"
 OVERLAY_ACTION_CHAPTER_NEXT = "chapter_next"
+OVERLAY_ACTION_AUDIO_TRACKS = "audio_tracks"
+OVERLAY_ACTION_AUDIO_TRACK_PREFIX = "audio_track:"
 OVERLAY_ACTION_SUBTITLES = "subtitles_menu"
 OVERLAY_ACTION_INFORMATION = "information"
 OVERLAY_ACTION_RETURN_TO_BROWSER = "return_to_browser"
@@ -75,17 +77,20 @@ START_MENU_ENTRIES_DVD = [
     (OVERLAY_ACTION_DVD_MENU, "DVD MENU"),
     (OVERLAY_ACTION_CHAPTER_PREV, "CHAPTER -"),
     (OVERLAY_ACTION_CHAPTER_NEXT, "CHAPTER +"),
+    (OVERLAY_ACTION_AUDIO_TRACKS, "AUDIO TRACK"),
     (OVERLAY_ACTION_SUBTITLES, "ENABLE SUBTITLES"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
 ]
 START_MENU_ENTRIES_VIDEO = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
+    (OVERLAY_ACTION_AUDIO_TRACKS, "AUDIO TRACK"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
 ]
 START_MENU_ENTRIES_PLEX = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
+    (OVERLAY_ACTION_AUDIO_TRACKS, "AUDIO TRACK"),
     (OVERLAY_ACTION_SUBTITLES, "ENABLE SUBTITLES"),
     (OVERLAY_ACTION_INFORMATION, "INFORMATION"),
     (OVERLAY_ACTION_RETURN_TO_BROWSER, "RETURN TO BROWSER"),
@@ -97,6 +102,25 @@ NETWORK_AUTH_LOGIN = "LOGIN"
 KEYBOARD_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 KEYBOARD_NUMBERS = "0123456789"
 KEYBOARD_SYMBOLS = "._-@"
+AUDIO_LANGUAGE_ALIASES = {
+    "DUT": ("DUT", "NLD", "NL"),
+    "NLD": ("NLD", "DUT", "NL"),
+    "NL": ("NL", "NLD", "DUT"),
+    "ENG": ("ENG", "EN"),
+    "EN": ("EN", "ENG"),
+    "FRE": ("FRE", "FRA", "FR"),
+    "FRA": ("FRA", "FRE", "FR"),
+    "FR": ("FR", "FRA", "FRE"),
+    "GER": ("GER", "DEU", "DE"),
+    "DEU": ("DEU", "GER", "DE"),
+    "DE": ("DE", "DEU", "GER"),
+    "SPA": ("SPA", "ES"),
+    "ES": ("ES", "SPA"),
+    "ITA": ("ITA", "IT"),
+    "IT": ("IT", "ITA"),
+    "JPN": ("JPN", "JA"),
+    "JA": ("JA", "JPN"),
+}
 
 
 def start_menu_entries_for_source(source: Optional[PlaybackSource]) -> list[tuple[str, str]]:
@@ -153,6 +177,10 @@ class App:
         self.playback_overlay_focus = 0
         self.playback_overlay_items: list[str] = []
         self.playback_overlay_actions: list[str] = []
+        self.session_audio_language: Optional[str] = None
+        self.session_audio_label_key: Optional[str] = None
+        self.session_audio_track_id: Optional[int] = None
+        self.playback_audio_prompt_resume_after = False
         self.playback_bookmark_key: Optional[str] = None
         self.last_bookmark_save = 0.0
         self.last_input = time.time()
@@ -275,6 +303,7 @@ class App:
         self.playback_overlay_focus = 0
         self.playback_overlay_items = []
         self.playback_overlay_actions = []
+        self.playback_audio_prompt_resume_after = False
 
     def _force_playback_cleanup(self, reason: str):
         if not self.playback:
@@ -1054,7 +1083,7 @@ class App:
     def handle_playback_action(self, action: Action):
         if not self.playback:
             return
-        if self.playback_overlay in {"start_menu", "seek", "subtitle_menu", "information"}:
+        if self.playback_overlay in {"start_menu", "seek", "audio_menu", "subtitle_menu", "information"}:
             self._handle_playback_overlay_action(action)
             return
         if action == Action.BACK:
@@ -1102,6 +1131,151 @@ class App:
         self.playback_overlay_actions = []
         self.playback.show_seek_overlay(paused=self.playback.pause_state(), step_seconds=30)
         log_event("overlay_open", overlay=self.playback_overlay)
+
+    def _open_audio_overlay(self, *, auto_prompt: bool = False):
+        if not self.playback:
+            return
+        try:
+            tracks = self.playback.audio_tracks()
+        except Exception as exc:
+            self.message = MessageBox("AUDIO", "Could not read audio tracks")
+            log_event("overlay_action_failed", action_id=OVERLAY_ACTION_AUDIO_TRACKS, error=str(exc))
+            self._close_overlay()
+            return
+        valid_tracks = [track for track in tracks if isinstance(track.get("id"), (int, float))]
+        if not valid_tracks:
+            self.message = MessageBox("AUDIO", "No audio tracks available")
+            log_event("overlay_action_ok", action_id=OVERLAY_ACTION_AUDIO_TRACKS, result="no_tracks")
+            self._close_overlay()
+            return
+
+        self.playback_overlay = "audio_menu"
+        self.playback_overlay_items = [str(track.get("label", "TRACK")) for track in valid_tracks]
+        self.playback_overlay_actions = [
+            f"{OVERLAY_ACTION_AUDIO_TRACK_PREFIX}{int(track.get('id', -1))}" for track in valid_tracks
+        ]
+        current_aid = self.playback.current_audio_track()
+        focus = 0
+        if isinstance(current_aid, int):
+            for index, action_id in enumerate(self.playback_overlay_actions):
+                if action_id == f"{OVERLAY_ACTION_AUDIO_TRACK_PREFIX}{current_aid}":
+                    focus = index
+                    break
+        self.playback_overlay_focus = focus
+        if auto_prompt:
+            try:
+                was_paused = self.playback.pause_state()
+                self.playback_audio_prompt_resume_after = not was_paused
+                if not was_paused:
+                    self.playback.set_pause(True)
+            except Exception as exc:
+                self.playback_audio_prompt_resume_after = False
+                log_event("audio_prompt_pause_failed", error=str(exc))
+            self.status_line = "Choose audio language"
+        self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+        log_event(
+            "overlay_open",
+            overlay=self.playback_overlay,
+            focus=self.playback_overlay_focus,
+            items=len(self.playback_overlay_items),
+            auto_prompt=auto_prompt,
+        )
+
+    def _playback_prefs_for_session(self):
+        if not self.session_audio_language:
+            return self.playback_state.prefs
+        return replace(
+            self.playback_state.prefs,
+            preferred_audio_language=self._audio_language_preference(self.session_audio_language),
+        )
+
+    def _remember_session_audio_track(self, track: dict) -> None:
+        lang = str(track.get("lang") or "").strip().upper()
+        label = str(track.get("label") or "").strip()
+        track_id = track.get("id")
+        self.session_audio_language = lang or None
+        self.session_audio_label_key = self._audio_label_key(label)
+        self.session_audio_track_id = int(track_id) if isinstance(track_id, (int, float)) else None
+        log_event(
+            "audio_session_choice_remembered",
+            lang=self.session_audio_language,
+            label=label,
+            track_id=self.session_audio_track_id,
+        )
+
+    def _audio_label_key(self, value: object) -> Optional[str]:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        return " ".join(text.split())
+
+    def _audio_language_keys(self, value: object) -> set[str]:
+        text = str(value or "").strip().upper()
+        if not text:
+            return set()
+        return set(AUDIO_LANGUAGE_ALIASES.get(text, (text,)))
+
+    def _audio_language_preference(self, value: object) -> str:
+        keys = AUDIO_LANGUAGE_ALIASES.get(str(value or "").strip().upper(), (str(value or "").strip().upper(),))
+        return ",".join(key.lower() for key in keys if key)
+
+    def _matching_session_audio_track(self, tracks: list[dict]) -> Optional[dict]:
+        if not tracks:
+            return None
+        if self.session_audio_language:
+            preferred = self._audio_language_keys(self.session_audio_language)
+            for track in tracks:
+                if preferred & self._audio_language_keys(track.get("lang")):
+                    return track
+        if self.session_audio_label_key:
+            for track in tracks:
+                if self._audio_label_key(track.get("label")) == self.session_audio_label_key:
+                    return track
+        if self.session_audio_language and any(self._audio_language_keys(track.get("lang")) for track in tracks):
+            return None
+        if self.session_audio_track_id is not None:
+            for track in tracks:
+                track_id = track.get("id")
+                if isinstance(track_id, (int, float)) and int(track_id) == self.session_audio_track_id:
+                    return track
+        return None
+
+    def _apply_or_prompt_audio_track(self):
+        if not self.playback:
+            return
+        try:
+            tracks = self.playback.audio_tracks()
+        except Exception as exc:
+            log_event("audio_tracks_read_failed", error=str(exc))
+            return
+        valid_tracks = [track for track in tracks if isinstance(track.get("id"), (int, float))]
+        if len(valid_tracks) <= 1:
+            return
+        matched = self._matching_session_audio_track(valid_tracks)
+        if matched:
+            self._select_audio_track(matched, remember=False, via="session")
+            return
+        self._open_audio_overlay(auto_prompt=True)
+
+    def _select_audio_track(self, track: dict, *, remember: bool, via: str) -> None:
+        if not self.playback:
+            return
+        track_id = track.get("id")
+        if not isinstance(track_id, (int, float)):
+            raise RuntimeError("audio track has no valid id")
+        self.playback.set_audio_track(int(track_id))
+        label = str(track.get("label") or f"TRACK {int(track_id)}")
+        if remember:
+            self._remember_session_audio_track(track)
+        self.status_line = f"Audio: {label}"
+        log_event(
+            "audio_track_selected",
+            track_id=int(track_id),
+            lang=str(track.get("lang") or ""),
+            label=label,
+            remember=remember,
+            via=via,
+        )
 
     def _open_subtitle_overlay(self):
         if not self.playback:
@@ -1253,11 +1427,17 @@ class App:
         if not self.playback:
             self._reset_playback_overlay_state()
             return
+        resume_after_audio_prompt = bool(self.playback_audio_prompt_resume_after)
         try:
             self.playback.clear_overlays()
         except Exception as exc:
             log_event("overlay_clear_failed", error=str(exc))
         self._reset_playback_overlay_state()
+        if resume_after_audio_prompt and self.playback:
+            try:
+                self.playback.set_pause(False)
+            except Exception as exc:
+                log_event("audio_prompt_resume_failed", error=str(exc))
         log_event("overlay_close")
 
     def _execute_overlay_action(self, action_id: str) -> bool:
@@ -1275,6 +1455,8 @@ class App:
                 self.playback.step_chapter(-1)
             elif action_id == OVERLAY_ACTION_CHAPTER_NEXT:
                 self.playback.step_chapter(1)
+            elif action_id == OVERLAY_ACTION_AUDIO_TRACKS:
+                self._open_audio_overlay()
             elif action_id == OVERLAY_ACTION_SUBTITLES:
                 self._open_subtitle_overlay()
             elif action_id == OVERLAY_ACTION_INFORMATION:
@@ -1322,8 +1504,42 @@ class App:
                 self._execute_overlay_action(action_id)
                 if action_id == OVERLAY_ACTION_RETURN_TO_BROWSER:
                     return
-                if action_id in {OVERLAY_ACTION_SUBTITLES, OVERLAY_ACTION_INFORMATION}:
+                if action_id in {OVERLAY_ACTION_AUDIO_TRACKS, OVERLAY_ACTION_SUBTITLES, OVERLAY_ACTION_INFORMATION}:
                     return
+                self._close_overlay()
+                return
+        elif self.playback_overlay == "audio_menu":
+            if action == Action.UP and self.playback_overlay_items:
+                self.playback_overlay_focus = (self.playback_overlay_focus - 1) % len(self.playback_overlay_items)
+                self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                log_event("overlay_focus", overlay="audio_menu", focus=self.playback_overlay_focus)
+                return
+            if action == Action.DOWN and self.playback_overlay_items:
+                self.playback_overlay_focus = (self.playback_overlay_focus + 1) % len(self.playback_overlay_items)
+                self.playback.show_audio_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                log_event("overlay_focus", overlay="audio_menu", focus=self.playback_overlay_focus)
+                return
+            if action == Action.ACCEPT:
+                action_id = self.playback_overlay_actions[self.playback_overlay_focus] if self.playback_overlay_actions else ""
+                source_kind = self.playback_source.kind.value if self.playback_source else "unknown"
+                try:
+                    if not action_id.startswith(OVERLAY_ACTION_AUDIO_TRACK_PREFIX):
+                        raise RuntimeError(f"unknown audio action: {action_id}")
+                    track_id = int(action_id.split(":", 1)[1])
+                    track = {"id": track_id, "label": "", "lang": ""}
+                    try:
+                        for candidate in self.playback.audio_tracks():
+                            candidate_id = candidate.get("id")
+                            if isinstance(candidate_id, (int, float)) and int(candidate_id) == track_id:
+                                track = candidate
+                                break
+                    except Exception as exc:
+                        log_event("audio_track_metadata_failed", error=str(exc))
+                    self._select_audio_track(track, remember=True, via="overlay")
+                    log_event("overlay_action_ok", action_id=action_id, source_kind=source_kind)
+                except Exception as exc:
+                    self.message = MessageBox("AUDIO", "Audio change failed")
+                    log_event("overlay_action_failed", action_id=action_id, source_kind=source_kind, error=str(exc))
                 self._close_overlay()
                 return
         elif self.playback_overlay == "subtitle_menu":
@@ -2120,7 +2336,7 @@ class App:
             self.return_list_items = []
             self.return_list_selected = 0
         try:
-            self.playback = PlaybackSession.start(self.app_dir, source, self.playback_state.prefs)
+            self.playback = PlaybackSession.start(self.app_dir, source, self._playback_prefs_for_session())
         except Exception as exc:
             self.message = MessageBox("PLAYBACK", f"Playback failed: {exc}")
             if self.return_screen_after_playback == Screen.LIST:
@@ -2158,6 +2374,7 @@ class App:
             self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
             pass
+        self._apply_or_prompt_audio_track()
 
     def stop_playback(self, status: str):
         self.persist_bookmark(force=True)
@@ -2533,7 +2750,7 @@ class App:
             youtube_screen_name=youtube_state.screen_name,
             youtube_queue_size=max(youtube_state.queue_size, len(youtube_queue)),
             youtube_receiver_healthy=bool(youtube_state.receiver_healthy),
-            overlay_focus=self.playback_overlay_focus if self.playback_overlay in {"start_menu", "seek", "subtitle_menu"} else None,
+            overlay_focus=self.playback_overlay_focus if self.playback_overlay in {"start_menu", "seek", "audio_menu", "subtitle_menu"} else None,
             overlay_items=list(self.playback_overlay_items),
             active_tty=self.active_tty,
             items=items,

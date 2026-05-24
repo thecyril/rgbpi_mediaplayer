@@ -875,7 +875,7 @@ class PlaybackSession:
             "--idle=no",
             "--force-window=no",
             "--keep-open=no",
-            "--alang=auto",
+            f"--alang={_mpv_language_preference(prefs.preferred_audio_language if prefs else None)}",
             "--slang=auto",
             "--audio-display=no",
             "--cache=yes",
@@ -1225,6 +1225,32 @@ class PlaybackSession:
         value = self.get_property("sid")
         return int(value) if isinstance(value, int) else None
 
+    def audio_tracks(self) -> list[dict[str, Any]]:
+        if self.backend != "mpv":
+            return []
+        tracks = self.get_property("track-list")
+        if not isinstance(tracks, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for track in tracks:
+            if not isinstance(track, dict) or track.get("type") != "audio":
+                continue
+            track_id = track.get("id")
+            if not isinstance(track_id, (int, float)):
+                continue
+            title = str(track.get("title") or "").strip()
+            lang = str(track.get("lang") or "").strip().upper()
+            if title and lang and lang not in title.upper():
+                label = f"{lang} {title}"
+            elif title:
+                label = title
+            elif lang:
+                label = lang
+            else:
+                label = f"TRACK {int(track_id)}"
+            out.append({"id": int(track_id), "label": label, "lang": lang})
+        return out
+
     def subtitle_tracks(self) -> list[dict[str, Any]]:
         if self.backend != "mpv":
             return []
@@ -1339,13 +1365,27 @@ class PlaybackSession:
     def show_subtitle_menu_overlay(self, selected: int, items: list[str]) -> None:
         self._show_simple_menu_overlay("SUBTITLE MENU", selected, items)
 
+    def show_audio_menu_overlay(self, selected: int, items: list[str]) -> None:
+        self._show_simple_menu_overlay("AUDIO MENU", selected, items)
+
     def _show_simple_menu_overlay(self, title: str, selected: int, items: list[str]) -> None:
         if self.backend != "mpv":
             return
         rows = [title, ""]
-        for i, text in enumerate(items[:6]):
-            prefix = ">" if i == selected else " "
+        visible_count = 6
+        safe_selected = min(max(0, selected), max(0, len(items) - 1))
+        start = 0
+        if len(items) > visible_count:
+            start = min(max(0, safe_selected - visible_count // 2), len(items) - visible_count)
+        visible = items[start : start + visible_count]
+        if start > 0:
+            rows.append("  ...")
+        for offset, text in enumerate(visible):
+            index = start + offset
+            prefix = ">" if index == safe_selected else " "
             rows.append(f"{prefix} {text}")
+        if start + visible_count < len(items):
+            rows.append("  ...")
         rows.extend(["", "UP/DOWN  A OK", "START/SELECT/B CLOSE"])
         self.show_text("\n".join(rows), duration_ms=600000)
 
@@ -1365,6 +1405,15 @@ def _child_env(app_dir: Path) -> dict[str, str]:
     existing = env.get("LD_LIBRARY_PATH", "")
     env["LD_LIBRARY_PATH"] = ":".join([p for p in (lib_paths + ([existing] if existing else [])) if p])
     return env
+
+
+def _mpv_language_preference(value: Optional[str]) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "auto"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789,_-")
+    cleaned = "".join(ch for ch in text if ch in allowed)
+    return cleaned or "auto"
 
 
 def _escape_ass_text(text: str) -> str:
