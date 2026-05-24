@@ -844,6 +844,16 @@ class PlaybackSession:
 
         hwdec_mode = os.environ.get("DVDPLAYER_MPV_HWDEC", "auto-safe").strip() or "auto-safe"
 
+        # mpv `--sub-font-size`, `--osd-font-size`, `--sub-margin-y` and
+        # `--sub-border-size` are expressed in "scaled pixels at a window
+        # height of 720" and mpv rescales them automatically with the actual
+        # output window height. Setting the values below to a fixed 720-base
+        # therefore keeps the same screen-relative size on a 240p CRT, on a
+        # 480i interlaced output and on a 1080p TV:
+        #   sub font   = 11% × 720 = 79
+        #   osd font   =  5% × 720 = 36 (kept lower than subs so the 11-row START menu overlay fits a 240p screen)
+        #   sub margin =  6% × 720 = 43
+        #   sub border = 720 / 180 = 4
         args = [
             mpv,
             "--fs",
@@ -854,12 +864,12 @@ class PlaybackSession:
             "--osd-level=0",
             "--osd-align-x=center",
             "--osd-align-y=center",
-            "--osd-font-size=24",
+            "--osd-font-size=36",
             "--osd-margin-y=0",
             "--sub-auto=no",
-            "--sub-font-size=16",
-            "--sub-margin-y=28",
-            "--sub-border-size=1",
+            "--sub-font-size=79",
+            "--sub-margin-y=43",
+            "--sub-border-size=4",
             "--sub-color=#FFF6EC",
             "--sub-border-color=#2C1204",
             f"--hwdec={hwdec_mode}",
