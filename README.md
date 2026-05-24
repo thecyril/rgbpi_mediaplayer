@@ -36,7 +36,10 @@ gamepad to open the playback overlay menu. Available entries (vary by source):
   when available). UP/DOWN to navigate, ACCEPT to switch.
 - **ENABLE SUBTITLES** — opens a sub-menu with OFF + each available subtitle
   track. UP/DOWN to navigate, ACCEPT to set.
-- **INFORMATION** — overlay with current playback info.
+- **INFORMATION** — overlay with current playback info. The `VIDEO RESOLUTION`
+  field shows the file's storage resolution; when mpv's display resolution
+  differs (typically DVD NTSC 720x480 played as 720x540 after pixel aspect
+  ratio correction), the corrected size is shown in parentheses.
 - **RETURN TO BROWSER** — stop playback and go back to the file/library list.
 
 Within a sub-menu (audio / subtitles), press **BACK / SELECT / START** to close

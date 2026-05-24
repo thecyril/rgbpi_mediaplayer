@@ -1378,12 +1378,22 @@ class App:
         ).upper()
         video_params = self._read_playback_property("video-params")
         if isinstance(video_params, dict):
-            w = int(video_params.get("dw") or video_params.get("w") or 0)
-            h = int(video_params.get("dh") or video_params.get("h") or 0)
+            # Storage resolution (pixels actually encoded in the file)
+            w = int(video_params.get("w") or 0)
+            h = int(video_params.get("h") or 0)
+            # Display resolution after pixel aspect ratio correction
+            # (e.g. DVD NTSC 720x480 with PAR 0.9091 -> displayed as 720x540)
+            dw = int(video_params.get("dw") or w)
+            dh = int(video_params.get("dh") or h)
         else:
-            w = 0
-            h = 0
-        video_resolution = f"{w}x{h}" if w > 0 and h > 0 else "UNKNOWN"
+            w = h = dw = dh = 0
+        if w > 0 and h > 0:
+            if (dw, dh) != (w, h):
+                video_resolution = f"{w}x{h} (display {dw}x{dh})"
+            else:
+                video_resolution = f"{w}x{h}"
+        else:
+            video_resolution = "UNKNOWN"
         tv_mode = self.playback.effective_mode or self.playback.target_mode
         tv_resolution = str(tv_mode or "UNKNOWN").upper()
         video_fps_raw = self._read_playback_property("container-fps") or self._read_playback_property("estimated-vf-fps")
