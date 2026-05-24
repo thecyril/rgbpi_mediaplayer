@@ -875,7 +875,7 @@ class PlaybackSession:
             "--idle=no",
             "--force-window=no",
             "--keep-open=no",
-            "--alang=auto",
+            f"--alang={_mpv_language_preference(prefs.preferred_audio_language if prefs else None)}",
             "--slang=auto",
             "--audio-display=no",
             "--cache=yes",
@@ -1226,7 +1226,6 @@ class PlaybackSession:
         return int(value) if isinstance(value, int) else None
 
     def _tracks_by_type(self, track_type: str) -> list[dict[str, Any]]:
-        """Return a normalized list of mpv tracks of the given type ("audio", "sub", "video")."""
         if self.backend != "mpv":
             return []
         tracks = self.get_property("track-list")
@@ -1353,9 +1352,20 @@ class PlaybackSession:
         if self.backend != "mpv":
             return
         rows = [title, ""]
-        for i, text in enumerate(items[:6]):
-            prefix = ">" if i == selected else " "
+        visible_count = 6
+        safe_selected = min(max(0, selected), max(0, len(items) - 1))
+        start = 0
+        if len(items) > visible_count:
+            start = min(max(0, safe_selected - visible_count // 2), len(items) - visible_count)
+        visible = items[start : start + visible_count]
+        if start > 0:
+            rows.append("  ...")
+        for offset, text in enumerate(visible):
+            index = start + offset
+            prefix = ">" if index == safe_selected else " "
             rows.append(f"{prefix} {text}")
+        if start + visible_count < len(items):
+            rows.append("  ...")
         rows.extend(["", "UP/DOWN  A OK", "START/SELECT/B CLOSE"])
         self.show_text("\n".join(rows), duration_ms=600000)
 
@@ -1375,6 +1385,15 @@ def _child_env(app_dir: Path) -> dict[str, str]:
     existing = env.get("LD_LIBRARY_PATH", "")
     env["LD_LIBRARY_PATH"] = ":".join([p for p in (lib_paths + ([existing] if existing else [])) if p])
     return env
+
+
+def _mpv_language_preference(value: Optional[str]) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "auto"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789,_-")
+    cleaned = "".join(ch for ch in text if ch in allowed)
+    return cleaned or "auto"
 
 
 def _escape_ass_text(text: str) -> str:

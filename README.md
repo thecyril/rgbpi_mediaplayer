@@ -42,6 +42,10 @@ gamepad to open the playback overlay menu. Available entries (vary by source):
 Within a sub-menu (audio / subtitles), press **BACK / SELECT / START** to close
 and return to playback.
 
+When a file starts with multiple audio tracks, the player asks once which audio
+track to use. That choice is remembered for the current app session so the next
+episode can start with the same language automatically.
+
 ## Runtime files
 
 Default runtime directory:
