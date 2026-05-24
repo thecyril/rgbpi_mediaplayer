@@ -46,6 +46,16 @@ When a file starts with multiple audio tracks, the player asks once which audio
 track to use. That choice is remembered for the current app session so the next
 episode can start with the same language automatically.
 
+## Performance notes
+
+- `--vd-lavc-threads=0` lets ffmpeg pick its own thread count. This matters on
+  Pi 4 since MPEG-2 isn't hardware-accelerated on this SoC (V4L2M2M on Pi 4
+  covers H.264 / HEVC only) — multi-thread software decode keeps a single
+  MPEG-2 stream from saturating one CPU core during playback.
+- `--cache=yes --demuxer-max-bytes=256MiB --demuxer-readahead-secs=20` keep
+  ~20 seconds of demuxer headroom; useful when streaming MKV / MP4 from a
+  Plex / SMB server with bursty network.
+
 ## Runtime files
 
 Default runtime directory:

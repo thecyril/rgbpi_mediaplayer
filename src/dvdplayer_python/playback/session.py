@@ -879,6 +879,9 @@ class PlaybackSession:
             "--slang=auto",
             "--audio-display=no",
             "--cache=yes",
+            "--demuxer-max-bytes=256MiB",
+            "--demuxer-readahead-secs=20",
+            "--vd-lavc-threads=0",  # 0 = auto, use all CPU cores (helps Pi 4 software MPEG-2 decode)
         ]
         # Keep mpv's built-in deinterlace disabled; we apply bwdif explicitly
         # in bob mode to avoid double-processing and heavy frame amplification.
