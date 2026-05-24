@@ -1225,7 +1225,7 @@ class PlaybackSession:
         value = self.get_property("sid")
         return int(value) if isinstance(value, int) else None
 
-    def audio_tracks(self) -> list[dict[str, Any]]:
+    def _tracks_by_type(self, track_type: str) -> list[dict[str, Any]]:
         if self.backend != "mpv":
             return []
         tracks = self.get_property("track-list")
@@ -1233,7 +1233,7 @@ class PlaybackSession:
             return []
         out: list[dict[str, Any]] = []
         for track in tracks:
-            if not isinstance(track, dict) or track.get("type") != "audio":
+            if not isinstance(track, dict) or track.get("type") != track_type:
                 continue
             track_id = track.get("id")
             if not isinstance(track_id, (int, float)):
@@ -1251,31 +1251,11 @@ class PlaybackSession:
             out.append({"id": int(track_id), "label": label, "lang": lang})
         return out
 
+    def audio_tracks(self) -> list[dict[str, Any]]:
+        return self._tracks_by_type("audio")
+
     def subtitle_tracks(self) -> list[dict[str, Any]]:
-        if self.backend != "mpv":
-            return []
-        tracks = self.get_property("track-list")
-        if not isinstance(tracks, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for track in tracks:
-            if not isinstance(track, dict) or track.get("type") != "sub":
-                continue
-            track_id = track.get("id")
-            if not isinstance(track_id, (int, float)):
-                continue
-            title = str(track.get("title") or "").strip()
-            lang = str(track.get("lang") or "").strip().upper()
-            if title and lang and lang not in title.upper():
-                label = f"{lang} {title}"
-            elif title:
-                label = title
-            elif lang:
-                label = lang
-            else:
-                label = f"TRACK {int(track_id)}"
-            out.append({"id": int(track_id), "label": label, "lang": lang})
-        return out
+        return self._tracks_by_type("sub")
 
     def show_text(self, text: str, duration_ms: int = 2000) -> None:
         if self.backend != "mpv":

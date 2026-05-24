@@ -24,6 +24,28 @@ cd /media/sd/roms/ports/rgbpi_mediaplayer
 ./start_rgbpi_dvdplayer_python.sh
 ```
 
+## Playback controls
+
+While playing back a Plex / video file / DVD source, press **START** on the
+gamepad to open the playback overlay menu. Available entries (vary by source):
+
+- **TOGGLE PAUSE**
+- **DVD MENU** (DVD only)
+- **CHAPTER -/+** (DVD only)
+- **AUDIO TRACK** — opens a sub-menu listing all audio tracks (language + title
+  when available). UP/DOWN to navigate, ACCEPT to switch.
+- **ENABLE SUBTITLES** — opens a sub-menu with OFF + each available subtitle
+  track. UP/DOWN to navigate, ACCEPT to set.
+- **INFORMATION** — overlay with current playback info.
+- **RETURN TO BROWSER** — stop playback and go back to the file/library list.
+
+Within a sub-menu (audio / subtitles), press **BACK / SELECT / START** to close
+and return to playback.
+
+When a file starts with multiple audio tracks, the player asks once which audio
+track to use. That choice is remembered for the current app session so the next
+episode can start with the same language automatically.
+
 ## Runtime files
 
 Default runtime directory:
