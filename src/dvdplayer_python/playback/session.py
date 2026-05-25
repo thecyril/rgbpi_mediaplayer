@@ -1094,14 +1094,19 @@ class PlaybackSession:
             # Drive ALSA directly: skip the system pcm.!default → plug →
             # sysdefault:0 chain so we don't get ALSA's poor
             # linear-interpolation resampler in the path. mpv's own
-            # resampler is much higher quality. The bcm2835 hardware is
-            # also pinned to its native config: s16 + 48 kHz (the AC3 /
-            # AAC / FLAC sources we play are all 48 kHz natively, so no
-            # resampling is needed at all 99% of the time).
+            # resampler (libswresample) is much higher quality.
+            #
+            # We pin the output sample rate to 48 kHz — the bcm2835
+            # driver's native rate, and the rate AC3 / AAC / FLAC sources
+            # are almost always encoded at — so on the common case
+            # libswresample is a passthrough and the audio reaches the
+            # PWM stage unmolested. mpv's ao_alsa.c negotiates the sample
+            # *format* automatically (snd_pcm_hw_params_test_format), so
+            # no need to pin --audio-format: bcm2835 only exposes S16_LE
+            # and mpv lands there on its own.
             "--ao=alsa",
             f"--audio-device=alsa/{_resolve_alsa_device()}",
             "--audio-samplerate=48000",
-            "--audio-format=s16",
             "--osd-level=0",
             "--osd-align-x=center",
             "--osd-align-y=center",
