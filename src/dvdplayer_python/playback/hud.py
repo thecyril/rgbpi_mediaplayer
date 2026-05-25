@@ -21,12 +21,13 @@ Design notes
   ``send_command`` (the mpv IPC shim) and ``get_state`` (returns current
   pause / position / duration) — so it can be unit-tested without an mpv
   subprocess and lives on its own in this module.
-* **Snapshot semantics, no live refresh.**  ``flash()`` renders the HUD
-  once with the current state. ``tick()`` only handles auto-hide. This
-  matches how Plex Web and uosc behave (the HUD is a peek, not a live
-  widget) and — crucially — it avoids the visible flicker mpv 0.32
-  produces when ``osd-overlay`` is updated repeatedly while a video is
-  being decoded.
+* **Low-rate persistence refresh.**  mpv 0.32 drops ``osd-overlay``
+  entries when the video frame composites them out (we observed the HUD
+  vanishing within ~1 frame of a video update). uosc gets around this
+  by re-issuing the overlay every frame from inside mpv (60 Hz) — but
+  Python-over-IPC at that rate flickers on this build. We compromise
+  at **1 Hz**: re-send the same payload once per second so the overlay
+  survives, and dedupe re-sends when nothing actually changed.
 * **Robust on mpv shutdown.**  IPC errors during render are swallowed; the
   next ``flash()`` will retry. The HUD never raises into the main loop.
 """
@@ -65,6 +66,11 @@ _PANEL_BOTTOM_Y = _TIME_LINE_Y + _TIME_FONT_SIZE + 8
 
 # -- Timing ---------------------------------------------------------------------
 _AUTOHIDE_SECONDS = 4.0
+# Re-send the overlay at this rate while visible. mpv 0.32 sometimes drops
+# osd-overlay entries when video frames composite them out; a slow heartbeat
+# keeps the HUD on screen without producing visible flicker (5 Hz did flicker
+# on this build — 1 Hz does not).
+_REFRESH_INTERVAL = 1.0
 
 # -- Glyphs ---------------------------------------------------------------------
 # Unicode glyphs that render in mpv's bundled font (DejaVu/Roboto-style).
@@ -124,6 +130,8 @@ class HUDState:
 
     visible: bool = False
     last_shown_at: float = 0.0
+    last_sent_at: float = 0.0
+    last_payload: Optional[str] = None
     title: str = ""
     paused: bool = False
     position: float = 0.0
@@ -178,13 +186,7 @@ class PlaybackHUD:
         self._state.title = str(title or "")
 
     def flash(self, *, now: Optional[float] = None) -> None:
-        """Show the HUD (or extend its visibility) and render once.
-
-        The render is a *snapshot* of the current state; the HUD will not
-        refresh itself afterwards. The caller is expected to call
-        :meth:`flash` again on the next user input (pause toggle, seek)
-        which is exactly what the main loop already does.
-        """
+        """Show the HUD (or extend its visibility) and render once."""
         if self._closed:
             return
         ts = float(now if now is not None else time.time())
@@ -192,7 +194,10 @@ class PlaybackHUD:
         self._state.last_shown_at = ts
         self._state.visible = True
         self._refresh_state()
-        self._render()
+        # Force the next send: a fresh user input deserves an immediate
+        # update even if the payload happens to match the cached one.
+        self._state.last_payload = None
+        self._render(ts)
         log_event("playback_hud_flash", was_visible=was_visible)
 
     def hide(self, *, now: Optional[float] = None, reason: str = "manual") -> None:
@@ -204,17 +209,22 @@ class PlaybackHUD:
         log_event("playback_hud_hide", reason=reason)
 
     def tick(self, now: float) -> None:
-        """Called from the main loop. Handles auto-hide only — no refresh.
+        """Called from the main loop. Handles auto-hide + the 1 Hz heartbeat.
 
-        We deliberately *don't* re-render here. Each ``osd-overlay`` update
-        on mpv 0.32 causes a brief on-screen flicker; rendering at 5 Hz
-        produced a visible strobe. The HUD is a snapshot taken at
-        :meth:`flash` time, mirroring Plex Web's peek-the-timeline UX.
+        The heartbeat re-sends the same overlay payload once per second to
+        keep mpv 0.32 from dropping it during video frame composites.
+        Dedup against ``last_payload`` keeps the IPC cost at exactly the
+        rate the visible state actually changes (timer text rolls over once
+        per second, knob position changes much less often).
         """
         if self._closed or not self._state.visible:
             return
         if now - self._state.last_shown_at >= self._autohide_seconds:
             self.hide(now=now, reason="autohide")
+            return
+        if now - self._state.last_sent_at >= _REFRESH_INTERVAL:
+            self._refresh_state()
+            self._render(now)
 
     def close(self) -> None:
         """Idempotent teardown. Removes the overlay and disables the HUD."""
@@ -237,12 +247,19 @@ class PlaybackHUD:
         self._state.position = float(pos or 0.0)
         self._state.duration = float(dur) if dur and dur > 0 else None
 
-    def _render(self) -> None:
+    def _render(self, now: float) -> None:
         # mpv 0.32 (the bundled binary on the Pi) accepts exactly 6 positional
         # args after the command name: id, format, data, res_x, res_y, z. The
         # `hidden` / `compute_bounds` flags were added later (>=0.34); passing
         # them here makes 0.32 reject the whole command silently.
         payload = self._build_ass()
+        if payload == self._state.last_payload:
+            # Re-send anyway on the heartbeat interval so mpv 0.32 doesn't
+            # drop the overlay. But if we just sent <1s ago, skip — there's
+            # no need to re-send the same payload more often than the
+            # heartbeat rate.
+            if now - self._state.last_sent_at < _REFRESH_INTERVAL:
+                return
         try:
             self._send(
                 [
@@ -259,6 +276,9 @@ class PlaybackHUD:
             if not self._error_logged:
                 log_event("playback_hud_render_failed", error=str(exc))
                 self._error_logged = True
+            return
+        self._state.last_payload = payload
+        self._state.last_sent_at = now
 
     def _clear_overlay(self) -> None:
         # Hiding == replacing the overlay with format="none" + empty data.
@@ -276,6 +296,7 @@ class PlaybackHUD:
             )
         except Exception:
             pass
+        self._state.last_payload = None
 
     # -- ASS construction ----------------------------------------------------
 
