@@ -591,6 +591,49 @@ class App:
             if now - self.last_bookmark_save >= BOOKMARK_SAVE_INTERVAL:
                 self.persist_bookmark(force=False)
                 self.last_bookmark_save = now
+            # Drive the HUD's auto-hide timer. Skip while any START/AUDIO/
+            # SUBTITLE/INFORMATION overlay is up — those overlays own the
+            # screen themselves and would just race the HUD.
+            if self.playback_overlay is None:
+                hud = self._hud()
+                if hud is not None:
+                    try:
+                        hud.tick(now)
+                    except Exception:
+                        pass
+
+    def _hud(self):
+        """Return the playback HUD if available, else ``None``.
+
+        Centralises the ``self.playback`` / backend / ``hud is None`` guard
+        so every call site doesn't have to repeat it.
+        """
+        if not self.playback:
+            return None
+        try:
+            return self.playback.hud
+        except Exception:
+            return None
+
+    def _flash_hud(self) -> None:
+        """Pop the HUD on screen (safe to call without an mpv session)."""
+        hud = self._hud()
+        if hud is None:
+            return
+        try:
+            hud.flash()
+        except Exception as exc:
+            log_event("playback_hud_action_failed", error=str(exc), action="flash")
+
+    def _hide_hud(self) -> None:
+        """Remove the HUD from the screen (safe to call without an mpv session)."""
+        hud = self._hud()
+        if hud is None:
+            return
+        try:
+            hud.hide()
+        except Exception as exc:
+            log_event("playback_hud_action_failed", error=str(exc), action="hide")
 
     def dispatch(self, action: Action, source: str):
         self.last_input = time.time()
@@ -1091,19 +1134,25 @@ class App:
             self.stop_playback("Playback stopped")
             return
         if action == Action.START:
+            # START opens its own menu overlay — make sure the HUD doesn't
+            # bleed underneath it.
+            self._hide_hud()
             self._open_start_overlay()
         elif action == Action.SELECT:
             self.stop_playback("Returned to browser")
         elif action == Action.LEFT:
             self.playback.seek_relative(-30)
             log_event("playback_seek", relative=-30)
+            self._flash_hud()
         elif action == Action.RIGHT:
             self.playback.seek_relative(30)
             log_event("playback_seek", relative=30)
+            self._flash_hud()
         elif action == Action.ACCEPT:
             paused = not self.playback.pause_state()
             self.playback.set_pause(paused)
             log_event("playback_pause", paused=paused)
+            self._flash_hud()
 
     def _open_start_overlay(self):
         if not self.playback:
@@ -1439,6 +1488,9 @@ class App:
                 self.playback.set_pause(False)
             except Exception as exc:
                 log_event("audio_prompt_resume_failed", error=str(exc))
+        # Flash the HUD on the way back to plain playback so the user can
+        # see where they are without pressing anything.
+        self._flash_hud()
         log_event("overlay_close")
 
     def _execute_overlay_action(self, action_id: str) -> bool:
@@ -2375,6 +2427,14 @@ class App:
             self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
             pass
+        # Brief HUD pop on session start so the user sees title + duration.
+        hud = self._hud()
+        if hud is not None:
+            try:
+                hud.set_title(source.title)
+                hud.flash()
+            except Exception as exc:
+                log_event("playback_hud_init_failed", error=str(exc))
         self._apply_or_prompt_audio_track()
 
     def stop_playback(self, status: str):
