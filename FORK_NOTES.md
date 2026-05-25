@@ -71,11 +71,11 @@ Rule of thumb:
 | [#5](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/5) | Multi-thread MPEG-2 decode + larger demuxer cache | `mpeg2-multi-thread-decode-and-cache` | 🕐 pending |
 | [#6](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/6) | Show both storage and display resolution in INFORMATION | `information-shows-storage-and-display-resolution` | 🕐 pending |
 | [#7](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/7) | Per-folder BACK navigation for Plex browsing | `plex-folder-back-navigation` | 🕐 pending |
-| — (TBD) | Plex-style playback HUD overlay (progress bar, pause icon, time, START hint) | `plex-style-playback-hud` | ✅ working on the Pi — ready to open upstream PR |
+| [#8](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/8) | Plex-style playback HUD overlay (incl. persistent-IPC bugfix) | `playback-hud-overlay` | 🕐 pending — working on the Pi |
 
 Each PR branch is a clean cherry-pick on top of `upstream/main` so it can be reviewed and merged independently. The corresponding feature is **also** present in this fork's `main`, sometimes via a slightly different combined commit; nothing depends on PR merge order.
 
-### Plex-style playback HUD (branch `plex-style-playback-hud`)
+### Plex-style playback HUD (branch `playback-hud-overlay`, PR #8)
 
 A bottom-band HUD that shows the title, a progress bar with playhead, current
 time / duration, a play/pause glyph, and a "START menu" hint. It auto-hides
