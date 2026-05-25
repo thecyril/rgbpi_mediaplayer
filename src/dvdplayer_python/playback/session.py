@@ -1099,7 +1099,7 @@ class PlaybackSession:
             # AAC / FLAC sources we play are all 48 kHz natively, so no
             # resampling is needed at all 99% of the time).
             "--ao=alsa",
-            f"--alsa-device={_resolve_alsa_device()}",
+            f"--audio-device=alsa/{_resolve_alsa_device()}",
             "--audio-samplerate=48000",
             "--audio-format=s16",
             "--osd-level=0",
