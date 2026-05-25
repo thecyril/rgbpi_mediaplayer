@@ -645,6 +645,15 @@ class PlaybackSession:
         self._started_at = time.time()
         self._request_id = 0
         self._hud: Optional["PlaybackHUD"] = None
+        # Persistent IPC socket. mpv ties osd-overlay lifetime to the libmpv
+        # client that issued it: as soon as the client (= socket connection)
+        # disconnects, mpv tears down its overlays. The original implementation
+        # opened a new socket per command (`with socket(...) as s:`), which
+        # made every `osd-overlay` we sent vanish on the next frame. Holding
+        # one socket open for the whole session lets the HUD persist.
+        # Ref: <https://github.com/mpv-player/mpv/blob/v0.32.0/DOCS/man/input.rst>
+        self._ipc_sock: Optional[socket.socket] = None
+        self._ipc_buf: bytes = b""
 
     @classmethod
     def start(cls, app_dir: Path, source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> "PlaybackSession":
@@ -1112,6 +1121,10 @@ class PlaybackSession:
         self._cleanup()
 
     def _cleanup(self) -> None:
+        # Close the persistent IPC socket *before* unlinking the path —
+        # the socket will fault otherwise and we'd lose the chance to
+        # send a clean disconnect.
+        self._close_ipc_socket()
         try:
             self.ipc_path.unlink(missing_ok=True)
         except Exception:
@@ -1129,39 +1142,94 @@ class PlaybackSession:
                 pass
         self._overlay_paths.clear()
 
+    def _open_ipc_socket(self) -> socket.socket:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(0.4)
+        sock.connect(str(self.ipc_path))
+        return sock
+
+    def _close_ipc_socket(self) -> None:
+        if self._ipc_sock is not None:
+            try:
+                self._ipc_sock.close()
+            except Exception:
+                pass
+        self._ipc_sock = None
+        self._ipc_buf = b""
+
     def _send(self, payload: dict) -> dict:
+        """Send a JSON-IPC request to mpv and wait for the matching response.
+
+        Uses the persistent socket stored on the session. mpv attaches
+        ``osd-overlay`` lifetimes to the client (= socket connection) — every
+        disconnect tears the overlays down — so we must hold one socket open
+        for the whole session, not one per request.
+
+        Asynchronous events / unrequested property-change messages that
+        arrive between requests are kept in :attr:`_ipc_buf` and discarded
+        on the next read; we only return when we find a response whose
+        ``request_id`` matches ours. On socket-level errors we close the
+        socket and retry once — a fresh socket reconnects to the same
+        ``--input-ipc-server`` and gets a new libmpv client (so any
+        ``osd-overlay`` still on screen would be dropped, but that's the
+        worst case, not the steady state).
+        """
         if self.backend != "mpv":
             raise RuntimeError(f"{self.backend} backend does not support IPC")
         self._request_id += 1
         request_id = int(payload.get("request_id") or self._request_id)
         message = dict(payload)
         message["request_id"] = request_id
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.4)
-            sock.connect(str(self.ipc_path))
-            sock.sendall((json.dumps(message) + "\n").encode("utf-8"))
-            deadline = time.time() + 2.0
-            pending = ""
-            while time.time() < deadline:
+        wire = (json.dumps(message) + "\n").encode("utf-8")
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            if self._ipc_sock is None:
                 try:
-                    raw = sock.recv(65536)
-                except socket.timeout:
+                    self._ipc_sock = self._open_ipc_socket()
+                    self._ipc_buf = b""
+                except OSError as exc:
+                    last_exc = exc
                     continue
-                if not raw:
-                    break
-                pending += raw.decode("utf-8", errors="ignore")
-                while "\n" in pending:
-                    line, pending = pending.split("\n", 1)
+            sock = self._ipc_sock
+            try:
+                sock.sendall(wire)
+            except OSError as exc:
+                last_exc = exc
+                self._close_ipc_socket()
+                continue
+
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                # First try to satisfy the request from already-buffered bytes.
+                while b"\n" in self._ipc_buf:
+                    line, _, self._ipc_buf = self._ipc_buf.partition(b"\n")
                     line = line.strip()
                     if not line:
                         continue
                     try:
-                        response = json.loads(line)
+                        response = json.loads(line.decode("utf-8", errors="ignore"))
                     except json.JSONDecodeError:
                         continue
                     if isinstance(response, dict) and response.get("request_id") == request_id:
                         return response
-            raise RuntimeError(f"mpv IPC timeout waiting for response {request_id}")
+                # Need more data.
+                try:
+                    raw = sock.recv(65536)
+                except socket.timeout:
+                    continue
+                except OSError as exc:
+                    last_exc = exc
+                    self._close_ipc_socket()
+                    break
+                if not raw:
+                    self._close_ipc_socket()
+                    break
+                self._ipc_buf += raw
+            else:
+                raise RuntimeError(f"mpv IPC timeout waiting for response {request_id}")
+            # Socket died mid-request — retry on next attempt with a fresh one.
+        raise RuntimeError(f"mpv IPC unreachable: {last_exc}")
 
     def command(self, command: list[Any]) -> dict:
         response = self._send({"command": command})
