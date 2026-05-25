@@ -71,8 +71,57 @@ Rule of thumb:
 | [#5](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/5) | Multi-thread MPEG-2 decode + larger demuxer cache | `mpeg2-multi-thread-decode-and-cache` | 🕐 pending |
 | [#6](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/6) | Show both storage and display resolution in INFORMATION | `information-shows-storage-and-display-resolution` | 🕐 pending |
 | [#7](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/7) | Per-folder BACK navigation for Plex browsing | `plex-folder-back-navigation` | 🕐 pending |
+| — (TBD) | Plex-style playback HUD overlay (progress bar, pause icon, time, START hint) | `plex-style-playback-hud` | ✅ working on the Pi — ready to open upstream PR |
 
 Each PR branch is a clean cherry-pick on top of `upstream/main` so it can be reviewed and merged independently. The corresponding feature is **also** present in this fork's `main`, sometimes via a slightly different combined commit; nothing depends on PR merge order.
+
+### Plex-style playback HUD (branch `plex-style-playback-hud`)
+
+A bottom-band HUD that shows the title, a progress bar with playhead, current
+time / duration, a play/pause glyph, and a "START menu" hint. It auto-hides
+4 seconds after the last input — same UX as Plex Web's peek-the-timeline.
+
+Implementation lives in [`src/dvdplayer_python/playback/hud.py`](src/dvdplayer_python/playback/hud.py) (~410 lines, snapshot-rendered ASS):
+
+- Rendered via mpv's `osd-overlay` JSON-IPC command with ASS markup — same
+  primitive uosc uses. No extra process, no extra dependency.
+- Reference resolution **1280×720** so it scales identically on a 240p CRT
+  and a 1080p LCD; same baseline as the `--osd-font-size=36` constant from
+  PR #4.
+- Owns mpv overlay slot id `7` (1 and 2 are taken by the existing
+  badge / info overlays).
+- Lazy-constructed on `PlaybackSession.hud` so the ffplay backend never
+  pulls the module in.
+- **Snapshot semantics.** `flash()` sends one `osd-overlay` and that's it.
+  `tick()` only handles auto-hide. mpv keeps the overlay on screen until
+  we send `format=none`. Steady-state IPC cost: 1 send per user input,
+  0 between.
+- `flash()` on ACCEPT (pause toggle), LEFT/RIGHT (±30 s seek), at
+  `start_playback()` (to show the title), and on `_close_overlay()` so the
+  user is reoriented when returning to plain playback. Hidden while a
+  START / AUDIO / SUBTITLE / INFORMATION text menu is up.
+- Standalone-testable: `PlaybackHUD` takes a `send_command` callable and a
+  `get_state` callable, so a unit test can assert the exact IPC payload
+  without spawning mpv.
+
+#### Lesson learned: persistent IPC socket is mandatory for `osd-overlay`
+
+Initial attempts had the HUD flicker (5 Hz re-render) or disappear within
+~1 frame (snapshot). After research, [mpv's `input.rst` spells it out](https://github.com/mpv-player/mpv/blob/v0.32.0/DOCS/man/input.rst):
+
+> "If the libmpv client is destroyed, all overlays associated with it are
+> also deleted. In particular, connecting via `--input-ipc-server`, adding
+> an overlay, and disconnecting will remove the overlay immediately again."
+
+`PlaybackSession._send` was opening a fresh Unix socket per command
+(`with socket(...) as s:`). Every `osd-overlay` we sent was tied to that
+short-lived libmpv client and got dropped on the next frame. The fix was
+structural — `PlaybackSession` now holds **one socket open for the whole
+session** (`self._ipc_sock`) with lazy reconnect on socket errors. The
+HUD code then collapses to pure snapshot semantics.
+
+This is the same reason `uosc` and the built-in `osc.lua` are in-process
+Lua scripts: the "client" is mpv itself, so the overlay lives forever.
 
 ---
 
@@ -142,4 +191,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 25 mai 2026._
+_Last updated: 25 mai 2026 (HUD branch validated on the Pi)._
