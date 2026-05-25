@@ -46,6 +46,15 @@ When a file starts with multiple audio tracks, the player asks once which audio
 track to use. That choice is remembered for the current app session so the next
 episode can start with the same language automatically.
 
+### Overlay text scaling
+
+Subtitle and OSD font sizes, border thickness and bottom margin are passed to
+mpv in its native "scaled pixels at a window height of 720" unit. mpv then
+rescales them automatically to the actual output window height — so the same
+constants give readable text on a 240p CRT, on a 480i interlaced output, and
+on a 1080p TV without any manual tweak (roughly 11 % of the screen height for
+subtitles, 9 % for OSD).
+
 ## Runtime files
 
 Default runtime directory:
