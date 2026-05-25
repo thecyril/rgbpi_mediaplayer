@@ -50,6 +50,16 @@ git push origin main
 # then `git pull` on the Pi
 ```
 
+### Branch hygiene
+
+The fork keeps a branch per still-open upstream PR (`proportional-overlay-text-sizes`, `mpeg2-multi-thread-decode-and-cache`, `information-shows-storage-and-display-resolution`, `plex-folder-back-navigation`). They look "unmerged" in a GUI like GitKraken because GitHub references them from the PR pages — their content is already in `main` via the merge commits, but the branch ref itself has to stay alive until the maintainer merges or closes the PR.
+
+Rule of thumb:
+
+- **Upstream-pending PR branch** — keep it. Delete only after the corresponding PR is merged or closed upstream.
+- **Internal work branch** (e.g. `plex-back-navigation`, `local-pi-defaults` were used during dev) — delete as soon as the work is merged into `main`. Pushed-but-no-PR-attached branches can be removed both locally (`git branch -D <name>`) and on the remote (`git push origin --delete <name>`).
+- **Anything older than the most recent merge into `main`** that doesn't match the two rules above is stale; nuke it.
+
 ---
 
 ## Upstream-pending PRs
