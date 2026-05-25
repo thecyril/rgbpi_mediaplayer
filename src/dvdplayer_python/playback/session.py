@@ -146,6 +146,15 @@ def _is_film_rate(fps: float) -> bool:
     return abs(fps - 23.976) < 0.2 or abs(fps - 24.0) < 0.2
 
 
+def _is_ntsc_rate(fps: float) -> bool:
+    return (
+        abs(fps - 29.97) < 0.2
+        or abs(fps - 30.0) < 0.2
+        or abs(fps - 59.94) < 0.2
+        or abs(fps - 60.0) < 0.2
+    )
+
+
 def _pal_speedup_enabled(prefs: Optional[PlaybackPrefs] = None) -> bool:
     """Is the European "PAL speedup" trick allowed for film-rate sources?
 
@@ -203,15 +212,6 @@ def _pal_speedup_factor(
     if target_mode != "720x576i":
         return None
     return 25.0 / float(fps)
-
-
-def _is_ntsc_rate(fps: float) -> bool:
-    return (
-        abs(fps - 29.97) < 0.2
-        or abs(fps - 30.0) < 0.2
-        or abs(fps - 59.94) < 0.2
-        or abs(fps - 60.0) < 0.2
-    )
 
 
 def _desired_output_mode(
