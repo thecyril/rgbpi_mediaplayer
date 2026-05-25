@@ -592,33 +592,49 @@ class App:
             if now - self.last_bookmark_save >= BOOKMARK_SAVE_INTERVAL:
                 self.persist_bookmark(force=False)
                 self.last_bookmark_save = now
-            # Drive the HUD auto-hide + lazy refresh. Skip while any START
-            # overlay is up — those overlays own the screen themselves.
+            # Drive the HUD's auto-hide timer. Skip while any START/AUDIO/
+            # SUBTITLE/INFORMATION overlay is up — those overlays own the
+            # screen themselves and would just race the HUD.
             if self.playback_overlay is None:
-                hud = self.playback.hud
+                hud = self._hud()
                 if hud is not None:
                     try:
                         hud.tick(now)
                     except Exception:
                         pass
 
-    def _flash_hud(self, *, hide: bool = False) -> None:
-        """Show or hide the playback HUD; safe to call without an mpv session."""
+    def _hud(self):
+        """Return the playback HUD if available, else ``None``.
+
+        Centralises the ``self.playback`` / backend / ``hud is None`` guard
+        so every call site doesn't have to repeat it.
+        """
         if not self.playback:
-            return
+            return None
         try:
-            hud = self.playback.hud
+            return self.playback.hud
         except Exception:
-            return
+            return None
+
+    def _flash_hud(self) -> None:
+        """Pop the HUD on screen (safe to call without an mpv session)."""
+        hud = self._hud()
         if hud is None:
             return
         try:
-            if hide:
-                hud.hide()
-            else:
-                hud.flash()
+            hud.flash()
         except Exception as exc:
-            log_event("playback_hud_action_failed", error=str(exc), hide=hide)
+            log_event("playback_hud_action_failed", error=str(exc), action="flash")
+
+    def _hide_hud(self) -> None:
+        """Remove the HUD from the screen (safe to call without an mpv session)."""
+        hud = self._hud()
+        if hud is None:
+            return
+        try:
+            hud.hide()
+        except Exception as exc:
+            log_event("playback_hud_action_failed", error=str(exc), action="hide")
 
     def dispatch(self, action: Action, source: str):
         self.last_input = time.time()
@@ -1145,7 +1161,7 @@ class App:
         if action == Action.START:
             # START opens its own menu overlay — make sure the HUD doesn't
             # bleed underneath it.
-            self._flash_hud(hide=True)
+            self._hide_hud()
             self._open_start_overlay()
         elif action == Action.SELECT:
             self.stop_playback("Returned to browser")
@@ -2448,14 +2464,14 @@ class App:
             self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
             pass
-        # Brief HUD on session start so the user can see title + duration.
-        try:
-            hud = self.playback.hud
-            if hud is not None:
+        # Brief HUD pop on session start so the user sees title + duration.
+        hud = self._hud()
+        if hud is not None:
+            try:
                 hud.set_title(source.title)
                 hud.flash()
-        except Exception as exc:
-            log_event("playback_hud_init_failed", error=str(exc))
+            except Exception as exc:
+                log_event("playback_hud_init_failed", error=str(exc))
         self._apply_or_prompt_audio_track()
 
     def stop_playback(self, status: str):

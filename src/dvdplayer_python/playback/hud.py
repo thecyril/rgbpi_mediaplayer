@@ -10,26 +10,34 @@ media player works.
 Design notes
 ------------
 * **Single mpv overlay slot.**  The HUD owns ``osd-overlay`` id
-  :data:`HUD_OVERLAY_ID`. Sending an empty ``ass-events`` payload (with the
-  ``hidden`` flag) removes it from the screen with no flicker.
-* **Reference resolution 1280×720.**  mpv scales the overlay to the actual
-  window so the HUD looks the same on a 240p CRT and a 1080p LCD. The
-  ``res_y=720`` baseline matches the value used elsewhere in this codebase
-  for OSD font sizes (see ``--osd-font-size=36`` in
-  ``playback.session``).
+  :data:`HUD_OVERLAY_ID` (slots 1 and 2 are taken by the existing
+  badge/info overlays in :mod:`playback.session`). Hiding the HUD
+  re-sends ``osd-overlay`` with ``format="none"``, which removes it
+  from the screen with no flicker.
+* **Reference resolution 1280×720.**  mpv scales the overlay to the
+  actual window, so the HUD looks the same on a 240p CRT and a 1080p
+  LCD. The ``res_y=720`` baseline matches the value used elsewhere in
+  this codebase for OSD font sizes (see ``--osd-font-size=36`` in
+  :mod:`playback.session`).
 * **Standalone, mpv-agnostic.**  The class takes two callables —
-  ``send_command`` (the mpv IPC shim) and ``get_state`` (returns current
-  pause / position / duration) — so it can be unit-tested without an mpv
-  subprocess and lives on its own in this module.
-* **Snapshot semantics, no live refresh.**  ``flash()`` renders the HUD
-  once and ``tick()`` only handles auto-hide. mpv keeps the overlay on
-  screen until we tell it otherwise — provided the underlying IPC
-  socket stays open. (mpv ties ``osd-overlay`` lifetime to the libmpv
-  client that issued it: disconnect the socket and the overlay vanishes
-  on the next frame. See the persistent-socket logic in
+  ``send_command`` (the mpv IPC shim) and ``get_state`` (returns the
+  current pause / position / duration) — so it can be unit-tested
+  without an mpv subprocess.
+* **Snapshot semantics.**  ``flash()`` renders the HUD once with the
+  current state; ``tick()`` only handles auto-hide. mpv keeps the
+  overlay on screen until we tell it otherwise — *provided the
+  underlying IPC socket stays open*. (mpv ties ``osd-overlay`` lifetime
+  to the libmpv client that issued it: closing the socket destroys the
+  overlay on the next frame. The persistent socket lives on
   :class:`PlaybackSession`.)
-* **Robust on mpv shutdown.**  IPC errors during render are swallowed; the
-  next ``flash()`` will retry. The HUD never raises into the main loop.
+* **Robust on mpv shutdown.**  IPC errors during render are swallowed
+  after a single ``playback_hud_render_failed`` debug event; the next
+  ``flash()`` will retry transparently. The HUD never raises into the
+  main loop.
+* **mpv 0.32 compatibility.**  The bundled mpv on the Pi is 0.32, where
+  ``osd-overlay`` takes exactly 6 positional args (id, format, data,
+  res_x, res_y, z). The ``hidden`` / ``compute_bounds`` flags added in
+  0.34+ would make 0.32 silently reject the command.
 """
 
 from __future__ import annotations
@@ -68,9 +76,9 @@ _PANEL_BOTTOM_Y = _TIME_LINE_Y + _TIME_FONT_SIZE + 8
 _AUTOHIDE_SECONDS = 4.0
 
 # -- Glyphs ---------------------------------------------------------------------
-# Unicode glyphs that render in mpv's bundled font (DejaVu/Roboto-style).
-_PLAY_ICON = "▶"         # ▶
-_PAUSE_ICON = "❚❚"  # ❚❚
+# Unicode glyphs that render in mpv's bundled OSD font (DejaVu / Roboto-style).
+_PLAY_ICON = "▶"
+_PAUSE_ICON = "❚❚"
 
 
 def _esc(text: object) -> str:
@@ -136,9 +144,8 @@ class PlaybackHUD:
 
     The HUD is **passive**: the caller (typically ``main.py``) calls
     :meth:`flash` when the user does something (pause toggle, seek) and
-    :meth:`tick` every frame from the main loop. The HUD handles its own
-    visibility timer and refresh cadence — there is no separate timer
-    thread.
+    :meth:`tick` every frame from the main loop. The HUD owns its own
+    visibility timer; no separate thread is involved.
 
     Args:
         send_command: Callable forwarding to ``PlaybackSession.command``.
@@ -238,43 +245,37 @@ class PlaybackHUD:
         self._state.duration = float(dur) if dur and dur > 0 else None
 
     def _render(self) -> None:
-        # mpv 0.32 (the bundled binary on the Pi) accepts exactly 6 positional
-        # args after the command name: id, format, data, res_x, res_y, z. The
-        # `hidden` / `compute_bounds` flags were added later (>=0.34); passing
-        # them here makes 0.32 reject the whole command silently.
         try:
-            self._send(
-                [
-                    "osd-overlay",
-                    HUD_OVERLAY_ID,
-                    "ass-events",
-                    self._build_ass(),
-                    0,              # res_x = 0 → auto-aspect, lets mpv compute
-                    _HUD_RES_Y,
-                    0,              # z-order
-                ]
-            )
+            self._send(self._overlay_command("ass-events", self._build_ass()))
         except Exception as exc:
             if not self._error_logged:
                 log_event("playback_hud_render_failed", error=str(exc))
                 self._error_logged = True
 
     def _clear_overlay(self) -> None:
-        # Hiding == replacing the overlay with format="none" + empty data.
         try:
-            self._send(
-                [
-                    "osd-overlay",
-                    HUD_OVERLAY_ID,
-                    "none",
-                    "",
-                    0,
-                    _HUD_RES_Y,
-                    0,
-                ]
-            )
+            self._send(self._overlay_command("none", ""))
         except Exception:
             pass
+
+    @staticmethod
+    def _overlay_command(fmt: str, data: str) -> list[Any]:
+        """Build an ``osd-overlay`` IPC command targeting this HUD's slot.
+
+        The 6-positional-arg form is the only one mpv 0.32 accepts (the
+        ``hidden`` / ``compute_bounds`` flags were added in 0.34+ and would
+        make 0.32 silently reject the command). ``res_x=0`` tells mpv to
+        derive the X resolution from the output aspect ratio.
+        """
+        return [
+            "osd-overlay",
+            HUD_OVERLAY_ID,
+            fmt,
+            data,
+            0,            # res_x — 0 = auto-aspect
+            _HUD_RES_Y,
+            0,            # z-order
+        ]
 
     # -- ASS construction ----------------------------------------------------
 

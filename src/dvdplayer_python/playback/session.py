@@ -1227,8 +1227,11 @@ class PlaybackSession:
                     break
                 self._ipc_buf += raw
             else:
+                # while-else: we ran out of time without breaking out due to a
+                # socket error or finding a matching response → timeout.
                 raise RuntimeError(f"mpv IPC timeout waiting for response {request_id}")
-            # Socket died mid-request — retry on next attempt with a fresh one.
+            # Socket died mid-request — fall through to retry once with a
+            # fresh connection. `last_exc` carries the underlying OSError.
         raise RuntimeError(f"mpv IPC unreachable: {last_exc}")
 
     def command(self, command: list[Any]) -> dict:
