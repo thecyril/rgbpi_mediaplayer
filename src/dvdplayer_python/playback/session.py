@@ -155,15 +155,25 @@ def _is_ntsc_rate(fps: float) -> bool:
     )
 
 
+def _resolve_bool_pref(
+    env_var: str,
+    pref_name: str,
+    prefs: Optional[PlaybackPrefs] = None,
+    default: bool = True,
+) -> bool:
+    """Resolve a bool setting: env var > prefs > default. Shared by speedups."""
+    env = os.environ.get(env_var, "").strip()
+    if env != "":
+        return env != "0"
+    if prefs is not None:
+        return bool(getattr(prefs, pref_name, default))
+    return default
+
+
 def _pal_speedup_enabled(prefs: Optional[PlaybackPrefs] = None) -> bool:
     """Is the European "PAL speedup" trick allowed for film-rate sources?
 
-    Resolution order (first match wins):
-      1. ``DVDPLAYER_PAL_SPEEDUP`` env var — hard per-session override.
-         "0" disables; anything else (incl. unset → falls through) enables.
-      2. ``prefs.pal_speedup`` — persisted user setting toggled from the
-         in-app SETTINGS menu ("24P SMOOTHING").
-      3. Default: ``True``.
+    Resolution: ``DVDPLAYER_PAL_SPEEDUP`` env > ``prefs.pal_speedup`` > True.
 
     When enabled, 23.976 / 24 fps sources are routed to PAL 50 Hz output
     AND played at exactly 25 fps via ``--speed=25/src_fps``, giving a
@@ -172,14 +182,30 @@ def _pal_speedup_enabled(prefs: Optional[PlaybackPrefs] = None) -> bool:
     every European TV broadcast of a Hollywood film used from 1960 to
     2010. When disabled, film rate falls back to NTSC 60 Hz with the
     classical 2:3 pulldown (regular judder, audio at correct pitch).
+    Toggled in-app via SETTINGS → "24P SMOOTHING".
     See FORK_NOTES "Film-rate handling".
     """
-    env = os.environ.get("DVDPLAYER_PAL_SPEEDUP", "").strip()
-    if env != "":
-        return env != "0"
-    if prefs is not None:
-        return bool(getattr(prefs, "pal_speedup", True))
-    return True
+    return _resolve_bool_pref("DVDPLAYER_PAL_SPEEDUP", "pal_speedup", prefs, default=True)
+
+
+def _ntsc_speedup_enabled(prefs: Optional[PlaybackPrefs] = None) -> bool:
+    """Is the NTSC speedup trick allowed for 29.97 / 59.94 fps sources?
+
+    Resolution: ``DVDPLAYER_NTSC_SPEEDUP`` env > ``prefs.ntsc_speedup`` > True.
+
+    Symmetric to the PAL speedup, but for the NTSC-side drift: 29.97 (=
+    30000/1001) and 59.94 (= 60000/1001) sources played on a 60 Hz output
+    naturally drift by 0.1 % against the display vblank, forcing mpv to
+    drop/duplicate a frame roughly every 50 s with the default ``audio``
+    sync (visible as an intermittent micro-hiccup). Speeding the source
+    up by exactly that 0.1 % matches the output rate perfectly (1:1 or
+    1:2 cadence). The audio side-effect is +0.017 semitones — below the
+    human pitch-detection threshold (≈ 0.05 semitones for a trained
+    ear), genuinely inaudible.
+
+    Toggled in-app via SETTINGS → "30P SMOOTHING".
+    """
+    return _resolve_bool_pref("DVDPLAYER_NTSC_SPEEDUP", "ntsc_speedup", prefs, default=True)
 
 
 def _pal_speedup_factor(
@@ -190,7 +216,7 @@ def _pal_speedup_factor(
     """Return the ``--speed`` factor for PAL speedup, or ``None`` if N/A.
 
     Returns ``None`` unless **all** of:
-      - the feature is enabled (env var or prefs — see :func:`_pal_speedup_enabled`);
+      - the feature is enabled (env var or prefs);
       - the source fps is known and matches film rate (23.976 / 24);
       - the **output target is PAL 50 Hz** (target_mode == "720x576i") —
         critical, because the whole point of the speedup is to convert
@@ -200,8 +226,7 @@ def _pal_speedup_factor(
         actively make things worse on the LCD pipeline.
 
     The caller is responsible for setting ``--audio-pitch-correction=no``
-    when applying the returned speed (otherwise mpv would resample audio
-    to keep pitch constant, defeating the purpose).
+    when applying the returned speed.
     """
     if not _pal_speedup_enabled(prefs):
         return None
@@ -212,6 +237,67 @@ def _pal_speedup_factor(
     if target_mode != "720x576i":
         return None
     return 25.0 / float(fps)
+
+
+def _ntsc_speedup_factor(
+    fps: Optional[float],
+    target_mode: Optional[str],
+    prefs: Optional[PlaybackPrefs] = None,
+) -> Optional[float]:
+    """Return the ``--speed`` factor to bump 29.97/59.94 to 30/60, or None.
+
+    Source fps     | speedup       | rounded-up effective rate
+    ---------------|---------------|--------------------------
+    29.97003       | 30/29.97003   | 30.0 → ratio 60/30 = 2.000 exact
+    59.94006       | 60/59.94006   | 60.0 → ratio 60/60 = 1.000 exact
+    30.000 / 60.000 (already exact) → None (no-op)
+    any other rate → None
+
+    Gated on target_mode == "720x480i" (NTSC 60 Hz) for the same reason
+    as :func:`_pal_speedup_factor`: applying the speedup on an LCD with
+    a non-60Hz refresh would actively hurt cadence.
+    """
+    if not _ntsc_speedup_enabled(prefs):
+        return None
+    if fps is None or fps <= 0:
+        return None
+    if target_mode != "720x480i":
+        return None
+    # Identify the nearest integer multiple of 60 that the source rate
+    # *almost* equals. 60/fps ≈ 2 for ~29.97, ≈ 1 for ~59.94.
+    n = round(60.0 / float(fps))
+    if n < 1 or n > 4:
+        return None
+    target = 60.0 / n
+    factor = target / float(fps)
+    # Only return a non-trivial factor — skip the no-op case where the
+    # source is already exact (30.000 / 60.000) so we don't add useless
+    # --speed=1.0 and --audio-pitch-correction=no args.
+    if abs(factor - 1.0) < 5e-4:
+        return None
+    # Sanity: don't apply if the source rate is *far* from the target
+    # (means it wasn't actually 29.97/59.94 but some unrelated rate
+    # that happened to round). Cap at 0.5 % drift.
+    if abs(factor - 1.0) > 5e-3:
+        return None
+    return factor
+
+
+def _speedup_for_source(
+    fps: Optional[float],
+    target_mode: Optional[str],
+    prefs: Optional[PlaybackPrefs] = None,
+) -> Optional[float]:
+    """Pick the right speedup factor for this source/output, or ``None``.
+
+    PAL and NTSC speedups are mutually exclusive by construction (each
+    is gated on a specific target_mode), so we just try one then the
+    other and take whichever returns a value.
+    """
+    pal = _pal_speedup_factor(fps, target_mode, prefs)
+    if pal is not None:
+        return pal
+    return _ntsc_speedup_factor(fps, target_mode, prefs)
 
 
 def _desired_output_mode(
@@ -1035,22 +1121,20 @@ class PlaybackSession:
         if monitor_pixel_aspect is not None:
             args.append(f"--monitorpixelaspect={monitor_pixel_aspect:.7f}")
 
-        # PAL speedup for film-rate sources (see _pal_speedup_factor).
-        # Gated on prefer_drm + drm_target so we only apply it when the
-        # output is *confirmed* to be PAL 50 Hz (--drm-mode=720x576@50).
-        # On the LCD pipeline (no drm_target, legacy fallback) the
-        # native output is usually 60 Hz, where 25 fps would give a
-        # worse cadence than the source's native 23.976 → 2:3 pulldown.
+        # Frame-rate smoothing (PAL or NTSC speedup — see _speedup_for_source).
+        # Gated on prefer_drm + drm_target so we only apply when the
+        # output is *confirmed* to be a CRT 50/60 Hz mode. On the LCD
+        # pipeline the native output rate is unpredictable and the
+        # speedup would likely worsen cadence rather than improve it.
         if prefer_drm and drm_target:
-            speedup = _pal_speedup_factor(source.hint_fps, target_mode, prefs=prefs)
+            speedup = _speedup_for_source(source.hint_fps, target_mode, prefs=prefs)
         else:
             speedup = None
         if speedup is not None:
             args.append(f"--speed={speedup:.6f}")
-            # Let audio pitch follow the speed change (default is "yes" =
-            # mpv resamples to keep original pitch, which would defeat the
-            # whole point: we *want* the +4 % pitch shift because the
-            # smooth 1:2 cadence is the trade we're making for it).
+            # Let audio pitch follow the speed change (default mpv behaviour
+            # is to resample to keep pitch constant, which would defeat the
+            # zero-judder trade we're making).
             args.append("--audio-pitch-correction=no")
 
         if prefer_drm and drm_target and target_mode:

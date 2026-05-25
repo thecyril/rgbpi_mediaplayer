@@ -133,6 +133,7 @@ The fork currently keeps these local defaults different from upstream:
 |---|---|---|---|
 | `mpv --osd-font-size` | `36` *(from PR #4 once merged)* | `36` (same) | Same as PR #4 — the original `24` was ~8 px on a 240p output (illegible) and `65` (an earlier revision of PR #4) overflowed the 11-row START overlay on 240p. `36` lands ~12 px on 240p, ~24 px on 480i, ~54 px on 1080p. |
 | Film-rate handling (23.976 / 24 fps source) | `720x576i` (PAL 50Hz) at native speed → ratio 2.085 → **irregular** 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence (hiccup every ~12 frames, very visible judder) | **PAL speedup** by default: `720x576i` (PAL 50Hz) **+ `--speed=25/src_fps` + `--audio-pitch-correction=no`** → effective rate 25 fps, ratio `50/25 = 2.000` exact → **perfect 1:2 cadence, zero judder**. Audio is pitched +4 % (~0.7 semitones up) as a side effect — the same shift every European broadcast of a Hollywood film used from 1960 to ~2010. Override: `DVDPLAYER_PAL_SPEEDUP=0` falls back to NTSC 60Hz routing (`720x480i`, ratio `60/23.976 = 2.503` → regular 2:3 pulldown, audio at correct pitch). |
+| NTSC-rate handling (29.97 / 59.94 fps source) | `720x480i` (NTSC 60Hz) at native speed → ratio 2.002 → mpv's audio sync drops/duplicates a frame every ~50 s to keep up with the 0.067 % drift → an intermittent **micro-hiccup** | **NTSC speedup** by default: `720x480i` + `--speed=30/src_fps` (= 1.001) + `--audio-pitch-correction=no` → effective rate 30 fps, ratio `60/30 = 2.000` exact → **perfect cadence**. Audio is pitched +0.017 semitones (well below human detection threshold of ≈ 0.05 semitones — genuinely inaudible). Symmetric to PAL speedup. Override: `DVDPLAYER_NTSC_SPEEDUP=0` or in-app SETTINGS → "30P SMOOTHING" OFF. |
 
 ### Reverted: motion defaults flip (commit 833a892 / merge c20029e + gating 0d7e2cd)
 
@@ -172,6 +173,12 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
   (`"pal_speedup": true/false`). Use the menu for permanent change,
   `DVDPLAYER_PAL_SPEEDUP=0/1` env var for a per-launch override
   (env always wins over prefs). Default: ON.
+- **30P SMOOTHING** (in-app SETTINGS menu) — same for the NTSC
+  speedup (29.97/59.94 → 30/60). Stored as `"ntsc_speedup"` in
+  `playback_prefs.json`. Env var `DVDPLAYER_NTSC_SPEEDUP=0/1`.
+  Default: ON. Audio shift is +0.017 semitones (inaudible) so
+  there's no real downside to leaving it on; the OFF case is
+  available mainly for A/B comparison.
 
 ---
 
