@@ -160,7 +160,7 @@ class PlaybackPrefs:
     default_mode: str = "60hz"
     force_43: bool = False
     volume_normalization: str = "light"
-    deinterlace_mode: str = "weave"
+    deinterlace_mode: str = "bob"
 
 
 def app_dir() -> Path:

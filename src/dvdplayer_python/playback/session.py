@@ -19,7 +19,17 @@ OVERLAY_BADGE_ID = 2
 FFPROBE_TIMEOUT_SECS = float(os.environ.get("DVDPLAYER_FFPROBE_TIMEOUT", "6"))
 LIGHT_NORMALIZATION_FILTER = "lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]"
 HIGH_NORMALIZATION_FILTER = "lavfi=[loudnorm=I=-18:TP=-2:LRA=11]"
-BOB_DEINTERLACE_FILTER = "bwdif=mode=send_field:parity=auto:deint=interlaced"
+# Default to send_frame (1 output per source frame, ~50% the CPU cost of
+# send_field). Override to "send_field" via DVDPLAYER_BWDIF_MODE for smooth
+# 60p deinterlace on LCD/progressive displays where the doubled framerate is
+# perceptible. On a CRT (60Hz interlaced) both modes look the same.
+_BWDIF_MODE = os.environ.get("DVDPLAYER_BWDIF_MODE", "send_frame").strip() or "send_frame"
+BOB_DEINTERLACE_FILTER = f"bwdif=mode={_BWDIF_MODE}:parity=auto:deint=interlaced"
+
+# Default mpv video sync. "display-resample" resamples audio so each decoded
+# video frame is shown on a fresh vblank (smooth motion on fixed-rate
+# displays); the audio pitch shift it introduces stays well under 0.1%.
+_DEFAULT_VIDEO_SYNC = "display-resample"
 SMOOTH_FPS_FILTER = "fps=60000/1001"
 CABLE_SMOOTH_BLEND_FILTER = "lavfi=[tblend=all_mode=average]"
 _FFMPEG_FILTER_SUPPORT_CACHE: dict[str, bool] = {}
@@ -531,27 +541,27 @@ def playback_profile_for_source(source: PlaybackSource, prefs: Optional[Playback
     if source.authored_dvd:
         return PlaybackProfile(
             motion_mode="authentic",
-            video_sync="audio",
+            video_sync=_DEFAULT_VIDEO_SYNC,
             interpolation="no",
             tscale="box",
         )
     if motion_mode == "cable_smooth":
         return PlaybackProfile(
             motion_mode="cable_smooth",
-            video_sync="audio",
+            video_sync=_DEFAULT_VIDEO_SYNC,
             interpolation="no",
             tscale="box",
         )
     if motion_mode == "smooth_tv":
         return PlaybackProfile(
             motion_mode="smooth_tv",
-            video_sync="audio",
+            video_sync=_DEFAULT_VIDEO_SYNC,
             interpolation="no",
             tscale="box",
         )
     return PlaybackProfile(
         motion_mode="authentic",
-        video_sync="audio",
+        video_sync=_DEFAULT_VIDEO_SYNC,
         interpolation="no",
         tscale="box",
     )
@@ -583,7 +593,10 @@ def audio_normalization_profile_for_source(
 
 def deinterlace_profile_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> tuple[str, Optional[str]]:
     del source  # Applies globally to all playback sources.
-    configured = _normalize_deinterlace_mode(getattr(prefs, "deinterlace_mode", "weave"))
+    # bob with bwdif's deint=interlaced flag is safe for progressive frames
+    # (the filter passes them through unchanged) but eliminates the "comb"
+    # artifact when watching interlaced sources (DVD remuxes, broadcast TV).
+    configured = _normalize_deinterlace_mode(getattr(prefs, "deinterlace_mode", "bob"))
     if configured == "bob":
         return "bob", BOB_DEINTERLACE_FILTER
     return "weave", None
