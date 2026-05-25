@@ -1416,8 +1416,61 @@ class PlaybackSession:
                     self.current_time(),
                     self.duration(),
                 ),
+                get_canvas_aspect=self._osd_display_aspect,
             )
         return self._hud
+
+    def _osd_display_aspect(self) -> Optional[float]:
+        """Display aspect of mpv's current OSD, or ``None`` if unknown.
+
+        Computed as ``osd-width / (osd-height * osd-par)``.
+
+        The unintuitive bit is the *inverse* placement of ``osd-par``: mpv
+        does NOT follow the classical PAR convention (``pixel_width /
+        pixel_height``). On a non-square-pixel mode like NTSC 720×480 with
+        ``--monitorpixelaspect=0.8889``, mpv reports
+        ``osd-par = 1.125 = 1/0.8889`` — i.e. mpv's ``osd-par`` is the
+        *vertical stretch factor* needed to convert the OSD pixel buffer
+        into a square-pixel display, equivalently
+        ``pixel_height / pixel_width``.
+
+        So for a 720×480 NTSC output:
+
+          aspect = 720 / (480 * 1.125) = 720 / 540 = 1.333  → 4:3 ✓
+
+        Cross-checked against the actual mpv ``screenshot-to-file`` output
+        size on the CRT pipeline (720×539, ratio 1.336), and against the
+        16:9 LCD pipeline (``osd-par = 1.0``, the formula collapses to
+        ``w/h`` and yields 1.778 = 16:9 as expected).
+
+        The HUD uses this to size its 720-baseline canvas so the layout
+        renders proportionally on 4:3 CRT outputs as well as 16:9 LCDs.
+        """
+        if self.backend != "mpv":
+            return None
+        try:
+            w = self.get_property("osd-width")
+            h = self.get_property("osd-height")
+        except Exception:
+            return None
+        try:
+            fw = float(w) if w else 0.0
+            fh = float(h) if h else 0.0
+        except (TypeError, ValueError):
+            return None
+        if fw <= 0 or fh <= 0:
+            return None
+        try:
+            par_raw = self.get_property("osd-par")
+        except Exception:
+            par_raw = None
+        try:
+            par = float(par_raw) if par_raw else 1.0
+        except (TypeError, ValueError):
+            par = 1.0
+        if par <= 0:
+            par = 1.0
+        return fw / (fh * par)
 
     def clear_overlays(self) -> None:
         """Hide every transient overlay drawn on top of the video.
