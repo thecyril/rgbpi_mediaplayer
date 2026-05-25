@@ -179,6 +179,13 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
   Default: ON. Audio shift is +0.017 semitones (inaudible) so
   there's no real downside to leaving it on; the OFF case is
   available mainly for A/B comparison.
+- `DVDPLAYER_ALSA_DEVICE=<device>` (env var) — pick the ALSA
+  device mpv opens. Default `hw:0,0` (card 0 = bcm2835 analog =
+  the RGB-Pi DAC pins). Use `hw:1,0` / `hw:2,0` for HDMI
+  outputs, or `plughw:0,0` if `hw:0,0` is held by another
+  process. We deliberately bypass `default` (which routes through
+  `plug → sysdefault:0`, where ALSA's linear-interpolation
+  resampler audibly degrades the sound).
 
 ---
 

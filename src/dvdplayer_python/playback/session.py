@@ -155,6 +155,25 @@ def _is_ntsc_rate(fps: float) -> bool:
     )
 
 
+def _resolve_alsa_device() -> str:
+    """Return the ALSA device string mpv should open.
+
+    Default is ``hw:0,0`` (card 0 = bcm2835 analog, the RGB-Pi DAC pins).
+    Going through ``default`` would route us via the system's
+    ``pcm.!default → plug → sysdefault:0`` chain, where the ``plug``
+    type does linear-interpolation rate/format conversion — perceptibly
+    worse than what mpv's internal resampler can do, and audible as a
+    "metallic / muffled" timbre vs Kodi (Kodi's AudioEngine talks
+    direct to ``hw:0,0`` for the same reason).
+
+    Override with ``DVDPLAYER_ALSA_DEVICE`` (e.g. ``hw:1,0`` for HDMI-0,
+    ``hw:2,0`` for HDMI-1, ``plughw:0,0`` if ``hw:0,0`` is held by
+    something else and you need ALSA's softer conversion).
+    """
+    override = os.environ.get("DVDPLAYER_ALSA_DEVICE", "").strip()
+    return override or "hw:0,0"
+
+
 def _resolve_bool_pref(
     env_var: str,
     pref_name: str,
@@ -1072,7 +1091,17 @@ class PlaybackSession:
             "--no-osc",
             "--input-default-bindings=no",
             "--audio-channels=stereo",
+            # Drive ALSA directly: skip the system pcm.!default → plug →
+            # sysdefault:0 chain so we don't get ALSA's poor
+            # linear-interpolation resampler in the path. mpv's own
+            # resampler is much higher quality. The bcm2835 hardware is
+            # also pinned to its native config: s16 + 48 kHz (the AC3 /
+            # AAC / FLAC sources we play are all 48 kHz natively, so no
+            # resampling is needed at all 99% of the time).
             "--ao=alsa",
+            f"--alsa-device={_resolve_alsa_device()}",
+            "--audio-samplerate=48000",
+            "--audio-format=s16",
             "--osd-level=0",
             "--osd-align-x=center",
             "--osd-align-y=center",
