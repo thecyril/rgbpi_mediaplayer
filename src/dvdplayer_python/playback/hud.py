@@ -14,11 +14,17 @@ Design notes
   badge/info overlays in :mod:`playback.session`). Hiding the HUD
   re-sends ``osd-overlay`` with ``format="none"``, which removes it
   from the screen with no flicker.
-* **Reference resolution 1280×720.**  mpv scales the overlay to the
-  actual window, so the HUD looks the same on a 240p CRT and a 1080p
-  LCD. The ``res_y=720`` baseline matches the value used elsewhere in
-  this codebase for OSD font sizes (see ``--osd-font-size=36`` in
-  :mod:`playback.session`).
+* **Reference resolution: 720-line baseline, aspect-adapted width.**
+  ``res_y`` is fixed at 720 so font sizes and Y coordinates render
+  identically on a 240p CRT and a 1080p LCD (same baseline as the
+  ``--osd-font-size=36`` constant in :mod:`playback.session`).
+  ``res_x`` is recomputed from mpv's current OSD aspect ratio on every
+  flash — 1280 on a 16:9 LCD, 960 on a 4:3 CRT — and the right-anchored
+  HUD elements (title-side glyph, hint, progress extent) are laid out
+  against that dynamic width. This avoids both the auto-aspect clipping
+  bug (when ``res_x=0`` made mpv silently shrink the canvas to 960×720
+  on 4:3 outputs and clip everything past x≈960) and the alternative
+  "fixed 1280×720" stretching that would squish rectangles on 4:3.
 * **Standalone, mpv-agnostic.**  The class takes two callables —
   ``send_command`` (the mpv IPC shim) and ``get_state`` (returns the
   current pause / position / duration) — so it can be unit-tested
@@ -137,6 +143,7 @@ class HUDState:
     paused: bool = False
     position: float = 0.0
     duration: Optional[float] = None
+    canvas_w: int = _HUD_RES_X
 
 
 class PlaybackHUD:
@@ -154,6 +161,13 @@ class PlaybackHUD:
         get_state:   Callable returning ``(paused, position_s, duration_s)``.
             ``duration_s`` may be ``None`` when mpv has not reported a
             duration yet (e.g. live streams).
+        get_canvas_aspect: Optional callable returning the OSD output's
+            display aspect ratio (``width * par / height``). When provided
+            (and returning a positive float), the HUD recomputes its
+            canvas width on every flash so the 720-line baseline layout
+            stays proportional on 4:3 CRT modes as well as 16:9 LCDs.
+            Returning ``None`` (or omitting the callable) keeps the
+            previous 1280×720 baseline.
         title:       Initial media title.
         autohide_seconds: Time after last activity before the HUD auto-hides.
     """
@@ -163,11 +177,13 @@ class PlaybackHUD:
         send_command: Callable[[list[Any]], dict],
         get_state: Callable[[], tuple[bool, float, Optional[float]]],
         *,
+        get_canvas_aspect: Optional[Callable[[], Optional[float]]] = None,
         title: str = "",
         autohide_seconds: float = _AUTOHIDE_SECONDS,
     ) -> None:
         self._send = send_command
         self._get_state = get_state
+        self._get_canvas_aspect = get_canvas_aspect
         self._autohide_seconds = float(autohide_seconds)
         self._state = HUDState(title=str(title or ""))
         self._closed = False
@@ -243,6 +259,26 @@ class PlaybackHUD:
         self._state.paused = bool(paused)
         self._state.position = float(pos or 0.0)
         self._state.duration = float(dur) if dur and dur > 0 else None
+        self._state.canvas_w = self._compute_canvas_w()
+
+    def _compute_canvas_w(self) -> int:
+        """Canvas width in 720-baseline units, derived from the OSD aspect.
+
+        Returns the 1280 fallback when the aspect cannot be queried (no
+        callable wired, mpv hasn't reported OSD dimensions yet, etc.).
+        Clamped to 1:1..21:9 so a bogus property value can't push the
+        layout off-screen.
+        """
+        if self._get_canvas_aspect is None:
+            return _HUD_RES_X
+        try:
+            aspect = self._get_canvas_aspect()
+        except Exception:
+            return _HUD_RES_X
+        if not aspect or float(aspect) <= 0:
+            return _HUD_RES_X
+        clamped = max(1.0, min(2.5, float(aspect)))
+        return int(round(_HUD_RES_Y * clamped))
 
     def _render(self) -> None:
         try:
@@ -258,21 +294,22 @@ class PlaybackHUD:
         except Exception:
             pass
 
-    @staticmethod
-    def _overlay_command(fmt: str, data: str) -> list[Any]:
+    def _overlay_command(self, fmt: str, data: str) -> list[Any]:
         """Build an ``osd-overlay`` IPC command targeting this HUD's slot.
 
         The 6-positional-arg form is the only one mpv 0.32 accepts (the
         ``hidden`` / ``compute_bounds`` flags were added in 0.34+ and would
-        make 0.32 silently reject the command). ``res_x=0`` tells mpv to
-        derive the X resolution from the output aspect ratio.
+        make 0.32 silently reject the command). ``res_x`` is passed
+        explicitly — set to the same dynamic value the layout was built
+        against (see :meth:`_compute_canvas_w`) so mpv doesn't silently
+        narrow the canvas on non-16:9 outputs and clip the right edge.
         """
         return [
             "osd-overlay",
             HUD_OVERLAY_ID,
             fmt,
             data,
-            0,            # res_x — 0 = auto-aspect
+            self._state.canvas_w,
             _HUD_RES_Y,
             0,            # z-order
         ]
@@ -280,8 +317,9 @@ class PlaybackHUD:
     # -- ASS construction ----------------------------------------------------
 
     def _build_ass(self) -> str:
+        canvas_w = self._state.canvas_w
         bar_x0 = _BAR_PADDING_X
-        bar_x1 = _HUD_RES_X - _BAR_PADDING_X
+        bar_x1 = canvas_w - _BAR_PADDING_X
         bar_w = bar_x1 - bar_x0
 
         dur = self._state.duration
@@ -298,7 +336,7 @@ class PlaybackHUD:
 
         events: list[str] = [
             # Scrim band behind the HUD content.
-            self._draw_rect(0, _PANEL_TOP_Y, _HUD_RES_X, _PANEL_BOTTOM_Y, _COL_PANEL),
+            self._draw_rect(0, _PANEL_TOP_Y, canvas_w, _PANEL_BOTTOM_Y, _COL_PANEL),
             # Title (top-left of the band).
             self._text(
                 _BAR_PADDING_X,
@@ -310,7 +348,7 @@ class PlaybackHUD:
             ),
             # Play/pause glyph (top-right of the band).
             self._text(
-                _HUD_RES_X - _BAR_PADDING_X,
+                canvas_w - _BAR_PADDING_X,
                 _TITLE_Y,
                 icon,
                 size=_ICON_FONT_SIZE,
@@ -354,7 +392,7 @@ class PlaybackHUD:
         )
         events.append(
             self._text(
-                _HUD_RES_X - _BAR_PADDING_X,
+                canvas_w - _BAR_PADDING_X,
                 _TIME_LINE_Y,
                 _esc(hint),
                 size=_HINT_FONT_SIZE,

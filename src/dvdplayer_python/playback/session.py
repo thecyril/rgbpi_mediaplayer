@@ -1680,8 +1680,44 @@ class PlaybackSession:
                     self.current_time(),
                     self.duration(),
                 ),
+                get_canvas_aspect=self._osd_display_aspect,
             )
         return self._hud
+
+    def _osd_display_aspect(self) -> Optional[float]:
+        """Display aspect of mpv's current OSD, or ``None`` if unknown.
+
+        Computed as ``osd-width * osd-par / osd-height`` so it stays
+        correct on non-square-pixel modes (e.g. 720×480 stretched to a
+        4:3 CRT). The HUD uses this to size its 720-baseline canvas so
+        the layout renders proportionally on 4:3 CRT outputs as well as
+        16:9 LCDs.
+        """
+        if self.backend != "mpv":
+            return None
+        try:
+            w = self.get_property("osd-width")
+            h = self.get_property("osd-height")
+        except Exception:
+            return None
+        try:
+            fw = float(w) if w else 0.0
+            fh = float(h) if h else 0.0
+        except (TypeError, ValueError):
+            return None
+        if fw <= 0 or fh <= 0:
+            return None
+        try:
+            par_raw = self.get_property("osd-par")
+        except Exception:
+            par_raw = None
+        try:
+            par = float(par_raw) if par_raw else 1.0
+        except (TypeError, ValueError):
+            par = 1.0
+        if par <= 0:
+            par = 1.0
+        return (fw * par) / fh
 
     def clear_overlays(self) -> None:
         """Hide every transient overlay drawn on top of the video.
