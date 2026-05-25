@@ -3028,6 +3028,9 @@ class App:
     def _force_43_subtitle(self) -> str:
         return "ON" if self.playback_state.prefs.force_43 else "OFF"
 
+    def _pal_speedup_subtitle(self) -> str:
+        return "ON (+4% audio)" if bool(getattr(self.playback_state.prefs, "pal_speedup", True)) else "OFF"
+
     def _deinterlace_label(self, value: str) -> str:
         return "BOB" if str(value).lower() == "bob" else "WEAVE"
 
@@ -3047,6 +3050,7 @@ class App:
             "settings_default_mode",
             "settings_volume_normalization",
             "settings_force_43",
+            "settings_pal_speedup",
         }
 
     def _is_switchable_setting_item(self, item: ListItem) -> bool:
@@ -3125,6 +3129,18 @@ class App:
             self.message = MessageBox("SETTINGS", f"FORCE 4:3 {'ON' if next_value else 'OFF'}")
             log_event("settings_force_43", enabled=next_value, via=action.value)
             return True
+        if item.kind == "settings_pal_speedup":
+            # Toggle bool. Same LEFT=OFF/RIGHT=ON pattern as settings_force_43
+            # so the user's mental model stays consistent across the menu.
+            next_value = action == Action.RIGHT
+            self.playback_state.prefs.pal_speedup = next_value
+            self.playback_state.write_prefs()
+            self._refresh_settings_items()
+            label = "ON (+4% audio)" if next_value else "OFF (2:3 pulldown)"
+            self.status_line = f"24p smoothing {label}"
+            self.message = MessageBox("SETTINGS", f"24P SMOOTHING {label}")
+            log_event("settings_pal_speedup", enabled=next_value, via=action.value)
+            return True
         return False
 
     def _settings_items(self) -> list[ListItem]:
@@ -3138,6 +3154,11 @@ class App:
                 title="CABLE SMOOTH PRESET",
                 subtitle="Apply 1999 cable profile",
                 kind="settings_cable_smooth_preset",
+            ),
+            ListItem(
+                title="24P SMOOTHING",
+                subtitle=self._pal_speedup_subtitle(),
+                kind="settings_pal_speedup",
             ),
             ListItem(
                 title="DEFAULT MODE",

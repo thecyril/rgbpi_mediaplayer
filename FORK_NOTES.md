@@ -167,10 +167,11 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
 - `DVDPLAYER_VIDEO_SYNC=display-resample` (env var) — force
   `display-resample` per session for users who want to test it on a
   fixed-rate LCD setup. Defaults to `"audio"`.
-- `DVDPLAYER_PAL_SPEEDUP=0` (env var) — disable PAL speedup for film
-  rate sources. Falls back to NTSC 60Hz / 2:3 pulldown for 23.976 / 24
-  fps content. Useful if you find the +4 % audio pitch shift annoying
-  on music-heavy content. Default: speedup enabled.
+- **24P SMOOTHING** (in-app SETTINGS menu) — toggle PAL speedup
+  ON/OFF without restarting. Stored in `playback_prefs.json`
+  (`"pal_speedup": true/false`). Use the menu for permanent change,
+  `DVDPLAYER_PAL_SPEEDUP=0/1` env var for a per-launch override
+  (env always wins over prefs). Default: ON.
 
 ---
 

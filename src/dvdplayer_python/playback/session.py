@@ -146,27 +146,42 @@ def _is_film_rate(fps: float) -> bool:
     return abs(fps - 23.976) < 0.2 or abs(fps - 24.0) < 0.2
 
 
-def _pal_speedup_enabled() -> bool:
+def _pal_speedup_enabled(prefs: Optional[PlaybackPrefs] = None) -> bool:
     """Is the European "PAL speedup" trick allowed for film-rate sources?
 
-    When enabled (default), 23.976 / 24 fps sources are routed to PAL 50 Hz
-    output AND played at exactly 25 fps via ``--speed=25/src_fps``, giving
-    a mathematically perfect 1:2 vsync cadence (zero judder). Audio is
-    pitched +4 % (~0.7 semitones) as a side effect — the same shift every
-    European TV broadcast of a Hollywood film used from 1960 to 2010.
+    Resolution order (first match wins):
+      1. ``DVDPLAYER_PAL_SPEEDUP`` env var — hard per-session override.
+         "0" disables; anything else (incl. unset → falls through) enables.
+      2. ``prefs.pal_speedup`` — persisted user setting toggled from the
+         in-app SETTINGS menu ("24P SMOOTHING").
+      3. Default: ``True``.
 
-    Set ``DVDPLAYER_PAL_SPEEDUP=0`` to disable, in which case film rate
-    falls back to NTSC 60 Hz with the classical 2:3 pulldown (regular
-    judder, audio at correct pitch). See FORK_NOTES "Film-rate handling".
+    When enabled, 23.976 / 24 fps sources are routed to PAL 50 Hz output
+    AND played at exactly 25 fps via ``--speed=25/src_fps``, giving a
+    mathematically perfect 1:2 vsync cadence (zero judder). Audio is
+    pitched +4 % (~0.7 semitones) as a side effect — the same shift
+    every European TV broadcast of a Hollywood film used from 1960 to
+    2010. When disabled, film rate falls back to NTSC 60 Hz with the
+    classical 2:3 pulldown (regular judder, audio at correct pitch).
+    See FORK_NOTES "Film-rate handling".
     """
-    return os.environ.get("DVDPLAYER_PAL_SPEEDUP", "1") != "0"
+    env = os.environ.get("DVDPLAYER_PAL_SPEEDUP", "").strip()
+    if env != "":
+        return env != "0"
+    if prefs is not None:
+        return bool(getattr(prefs, "pal_speedup", True))
+    return True
 
 
-def _pal_speedup_factor(fps: Optional[float], target_mode: Optional[str]) -> Optional[float]:
+def _pal_speedup_factor(
+    fps: Optional[float],
+    target_mode: Optional[str],
+    prefs: Optional[PlaybackPrefs] = None,
+) -> Optional[float]:
     """Return the ``--speed`` factor for PAL speedup, or ``None`` if N/A.
 
     Returns ``None`` unless **all** of:
-      - the feature is enabled (``DVDPLAYER_PAL_SPEEDUP`` unset or "1");
+      - the feature is enabled (env var or prefs — see :func:`_pal_speedup_enabled`);
       - the source fps is known and matches film rate (23.976 / 24);
       - the **output target is PAL 50 Hz** (target_mode == "720x576i") —
         critical, because the whole point of the speedup is to convert
@@ -179,7 +194,7 @@ def _pal_speedup_factor(fps: Optional[float], target_mode: Optional[str]) -> Opt
     when applying the returned speed (otherwise mpv would resample audio
     to keep pitch constant, defeating the purpose).
     """
-    if not _pal_speedup_enabled():
+    if not _pal_speedup_enabled(prefs):
         return None
     if fps is None or fps <= 0:
         return None
@@ -199,7 +214,12 @@ def _is_ntsc_rate(fps: float) -> bool:
     )
 
 
-def _desired_output_mode(width: int, height: int, fps: Optional[float]) -> Optional[str]:
+def _desired_output_mode(
+    width: int,
+    height: int,
+    fps: Optional[float],
+    prefs: Optional[PlaybackPrefs] = None,
+) -> Optional[str]:
     if width <= 400 and height <= 300:
         return None
     # Film rate (23.976 / 24 fps): the cadence is the hard problem here
@@ -222,7 +242,7 @@ def _desired_output_mode(width: int, height: int, fps: Optional[float]) -> Optio
     # frames). That irregular cadence is what the user was reporting as
     # "ça jitter" and is the worst of the three options.
     if fps is not None and _is_film_rate(fps):
-        return "720x576i" if _pal_speedup_enabled() else "720x480i"
+        return "720x576i" if _pal_speedup_enabled(prefs) else "720x480i"
     if fps is not None and _is_pal_rate(fps):
         return "720x576i"
     if fps is not None and _is_ntsc_rate(fps):
@@ -436,13 +456,13 @@ def _target_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPref
         if p.exists():
             dims = _probe_authored_dvd_dimensions(p)
             if dims:
-                mode = _desired_output_mode(dims[0], dims[1], None)
+                mode = _desired_output_mode(dims[0], dims[1], None, prefs=prefs)
                 if mode:
                     log_event("video_timing_probe", title=source.title, kind=source.kind.value, width=dims[0], height=dims[1], fps=None, mode=mode, probe="authored_dvd")
                 return mode
         info = _probe_video_info(source.uri)
         if info:
-            mode = _desired_output_mode(info.width, info.height, info.fps)
+            mode = _desired_output_mode(info.width, info.height, info.fps, prefs=prefs)
             if not mode and info.field_order:
                 field_order = info.field_order.lower()
                 if field_order not in {"progressive", "unknown"}:
@@ -469,7 +489,7 @@ def _target_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPref
         return fallback
 
     if isinstance(source.hint_width, int) and isinstance(source.hint_height, int):
-        mode = _desired_output_mode(source.hint_width, source.hint_height, source.hint_fps)
+        mode = _desired_output_mode(source.hint_width, source.hint_height, source.hint_fps, prefs=prefs)
         if mode:
             log_event(
                 "video_timing_probe",
@@ -518,7 +538,7 @@ def _target_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPref
         )
         return default_fallback_output_mode
 
-    mode = _desired_output_mode(info.width, info.height, info.fps)
+    mode = _desired_output_mode(info.width, info.height, info.fps, prefs=prefs)
     if not mode and info.field_order:
         field_order = info.field_order.lower()
         if field_order not in {"progressive", "unknown"}:
@@ -1022,7 +1042,7 @@ class PlaybackSession:
         # native output is usually 60 Hz, where 25 fps would give a
         # worse cadence than the source's native 23.976 → 2:3 pulldown.
         if prefer_drm and drm_target:
-            speedup = _pal_speedup_factor(source.hint_fps, target_mode)
+            speedup = _pal_speedup_factor(source.hint_fps, target_mode, prefs=prefs)
         else:
             speedup = None
         if speedup is not None:

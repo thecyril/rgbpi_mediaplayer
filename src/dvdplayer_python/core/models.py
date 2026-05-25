@@ -161,6 +161,7 @@ class PlaybackPrefs:
     force_43: bool = False
     volume_normalization: str = "light"
     deinterlace_mode: str = "weave"
+    pal_speedup: bool = True
 
 
 def app_dir() -> Path:
