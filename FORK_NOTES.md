@@ -71,8 +71,37 @@ Rule of thumb:
 | [#5](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/5) | Multi-thread MPEG-2 decode + larger demuxer cache | `mpeg2-multi-thread-decode-and-cache` | 🕐 pending |
 | [#6](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/6) | Show both storage and display resolution in INFORMATION | `information-shows-storage-and-display-resolution` | 🕐 pending |
 | [#7](https://github.com/joeblack2k/rgbpi_mediaplayer/pull/7) | Per-folder BACK navigation for Plex browsing | `plex-folder-back-navigation` | 🕐 pending |
+| — (TBD) | Plex-style playback HUD overlay (progress bar, pause icon, time, START hint) | `plex-style-playback-hud` | 🚧 in-progress (needs Pi validation before opening upstream PR) |
 
 Each PR branch is a clean cherry-pick on top of `upstream/main` so it can be reviewed and merged independently. The corresponding feature is **also** present in this fork's `main`, sometimes via a slightly different combined commit; nothing depends on PR merge order.
+
+### Plex-style playback HUD (branch `plex-style-playback-hud`)
+
+A bottom-band HUD that shows the title, a progress bar with playhead, current
+time / duration, a play/pause glyph, and a "START menu" hint. It auto-hides
+4 seconds after the last input.
+
+Implementation lives in [`src/dvdplayer_python/playback/hud.py`](src/dvdplayer_python/playback/hud.py):
+
+- Rendered via mpv's `osd-overlay` JSON-IPC command with ASS markup — same
+  primitive uosc uses. No extra process, no extra dependency.
+- Reference resolution **1280×720** so it scales identically on a 240p CRT
+  and a 1080p LCD; same baseline as the `--osd-font-size=36` constant from
+  PR #4.
+- Owns mpv overlay slot id `7` (1 and 2 are taken by START menu / badge).
+- Lazy-constructed on `PlaybackSession.hud` so the ffplay backend never
+  pulls the module in.
+- Re-renders at **5 Hz** while visible (and only when the ASS payload
+  actually changed), so the IPC traffic stays negligible on a 30 fps main
+  loop.
+- `flash()` on ACCEPT (pause toggle), LEFT/RIGHT (±30 s seek), and on
+  overlay close so the user is reoriented when returning to plain playback.
+  Hidden while a START / AUDIO / SUBTITLE / INFORMATION overlay is up — the
+  in-place text menu owns the screen.
+
+Standalone-testable: `PlaybackHUD` takes a `send_command` callable and a
+`get_state` callable, so a unit test can assert IPC payloads without
+spawning mpv.
 
 ---
 
@@ -142,4 +171,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 25 mai 2026._
+_Last updated: 25 mai 2026 (HUD branch added)._

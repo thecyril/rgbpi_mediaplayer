@@ -644,6 +644,7 @@ class PlaybackSession:
         self._overlay_paths: list[Path] = []
         self._started_at = time.time()
         self._request_id = 0
+        self._hud: Optional["PlaybackHUD"] = None
 
     @classmethod
     def start(cls, app_dir: Path, source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> "PlaybackSession":
@@ -1354,13 +1355,47 @@ class PlaybackSession:
         )
         return effective_mode, degraded
 
+    @property
+    def hud(self) -> Optional["PlaybackHUD"]:
+        """Lazy-built :class:`PlaybackHUD` bound to this session.
+
+        Returns ``None`` for non-mpv backends (ffplay) which have no IPC
+        channel to drive an overlay. Constructing on first access keeps the
+        ``hud`` module out of the import graph until it is actually needed.
+        """
+        if self.backend != "mpv":
+            return None
+        if self._hud is None:
+            from dvdplayer_python.playback.hud import PlaybackHUD
+
+            self._hud = PlaybackHUD(
+                send_command=self.command,
+                get_state=lambda: (
+                    self.pause_state(),
+                    self.current_time(),
+                    self.duration(),
+                ),
+            )
+        return self._hud
+
     def clear_overlays(self) -> None:
+        """Hide every transient overlay drawn on top of the video.
+
+        The HUD is *hidden* but not destroyed — the next call to
+        ``self.hud.flash()`` (e.g. user pauses or seeks) brings it back. Full
+        teardown happens on :meth:`quit`, when the mpv subprocess goes away.
+        """
         if self.backend != "mpv":
             return
         try:
             self.clear_text()
         except Exception:
             pass
+        if self._hud is not None:
+            try:
+                self._hud.hide()
+            except Exception:
+                pass
         for oid in (OVERLAY_MAIN_ID, OVERLAY_BADGE_ID):
             try:
                 self.command(["overlay-remove", oid])
