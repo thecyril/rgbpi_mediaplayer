@@ -178,6 +178,7 @@ class App:
         self.playback_overlay_focus = 0
         self.playback_overlay_items: list[str] = []
         self.playback_overlay_actions: list[str] = []
+        self.list_nav_stack: list[dict] = []
         self.session_audio_language: Optional[str] = None
         self.session_audio_label_key: Optional[str] = None
         self.session_audio_track_id: Optional[int] = None
@@ -677,7 +678,8 @@ class App:
         elif action == Action.X and self.list_items:
             self._save_selected_network_favorite()
         elif action in {Action.BACK, Action.SELECT}:
-            self.go_home()
+            if not self._pop_list_nav():
+                self.go_home()
         elif action in {Action.ACCEPT, Action.START} and self.list_items:
             item = self.list_items[self.list_selected]
             if self._is_switchable_setting_item(item):
@@ -686,6 +688,29 @@ class App:
                 return
             log_event("list_accept", selected=self.list_selected, title=item.title, kind=item.kind, path=item.path, via=action.value)
             self.activate_list_item(item)
+
+    def _push_list_nav(self) -> None:
+        """Snapshot the current list state so BACK can restore it later."""
+        self.list_nav_stack.append({
+            "items": list(self.list_items),
+            "selected": self.list_selected,
+            "section": self.section,
+        })
+
+    def _pop_list_nav(self) -> bool:
+        """Restore the previous list state. Returns False when the stack is empty."""
+        if not self.list_nav_stack:
+            return False
+        state = self.list_nav_stack.pop()
+        self.list_items = state["items"]
+        self.list_selected = state["selected"]
+        self.section = state["section"]
+        self._log_list_selection()
+        return True
+
+    def _clear_list_nav(self) -> None:
+        """Reset the nav history (called when leaving the LIST screen entirely)."""
+        self.list_nav_stack = []
 
     def _log_list_selection(self):
         if not self.list_items:
@@ -2056,6 +2081,7 @@ class App:
                 nodes = self.plex.library_sections()
                 if not nodes:
                     nodes = self.plex.cached_sections()
+                self._push_list_nav()
                 self.list_items = [ListItem(title=n.title, subtitle=n.subtitle, kind="plex_node", payload={"node": asdict(n)}) for n in nodes]
                 self.list_items.append(
                     ListItem(
@@ -2274,6 +2300,7 @@ class App:
             kind = node.get("kind")
             if kind in {"section", "directory"}:
                 nodes = self.plex.browse_path(node.get("key", ""))
+                self._push_list_nav()
                 self.list_items = [ListItem(title=n.title, subtitle=n.subtitle, kind="plex_node", payload={"node": asdict(n)}) for n in nodes]
                 self.list_items.append(
                     ListItem(
@@ -2628,6 +2655,7 @@ class App:
         return ("RESUME PLAYBACK", "No resumable playback", False)
 
     def go_home(self):
+        self._clear_list_nav()
         self.list_items = []
         self.list_selected = 0
         self.set_screen(Screen.HOME, "HOME")
