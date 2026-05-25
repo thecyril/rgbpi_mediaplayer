@@ -19,37 +19,16 @@ OVERLAY_BADGE_ID = 2
 FFPROBE_TIMEOUT_SECS = float(os.environ.get("DVDPLAYER_FFPROBE_TIMEOUT", "6"))
 LIGHT_NORMALIZATION_FILTER = "lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]"
 HIGH_NORMALIZATION_FILTER = "lavfi=[loudnorm=I=-18:TP=-2:LRA=11]"
-# Default to send_frame (1 output per source frame, ~50% the CPU cost of
-# send_field). Override to "send_field" via DVDPLAYER_BWDIF_MODE for smooth
-# 60p deinterlace on LCD/progressive displays where the doubled framerate is
-# perceptible. On a CRT (60Hz interlaced) both modes look the same.
-_BWDIF_MODE = os.environ.get("DVDPLAYER_BWDIF_MODE", "send_frame").strip() or "send_frame"
+# Bob deinterlace filter (only used when PlaybackPrefs.deinterlace_mode = "bob";
+# the default is "weave" which leaves interlaced fields untouched — best for the
+# CRT pipeline since the analog output already scans by fields).
+#
+# DVDPLAYER_BWDIF_MODE env var lets the rare opt-in user pick send_field
+# (60p output, 2x VO thread cost) instead of send_frame (1x). On a CRT both
+# modes look identical because the CRT itself scans by fields; on a progressive
+# LCD setup, send_field gives smoother 60p motion at the cost of CPU.
+_BWDIF_MODE = os.environ.get("DVDPLAYER_BWDIF_MODE", "send_field").strip() or "send_field"
 BOB_DEINTERLACE_FILTER = f"bwdif=mode={_BWDIF_MODE}:parity=auto:deint=interlaced"
-
-# Video sync defaults.
-#
-# mpv's `display-resample` resamples audio so each decoded video frame is shown
-# on a fresh vblank (smooth motion on fixed-rate displays); the audio pitch
-# shift it introduces stays well under 0.1%. The catch: when the source frame
-# rate doesn't divide the display refresh, `display-resample` still has to
-# duplicate/skip frames to fill the gap (the mpv manual is explicit about
-# this — "playing 24 fps video on a 60 Hz screen will play video in a
-# 2-3-2-3-... pattern"). That 2:3 cadence is visible judder, made worse on
-# the Pi 4 / vc4 KMS by the documented inaccurate display-fps reporting
-# (raspberrypi/firmware#960).
-#
-# We therefore gate `display-resample` on field-rate matching: use it when the
-# output refresh is a near-integer multiple of the source fps (≤ 1% tolerance,
-# which covers 23.976→24, 29.97→30 and the 60/29.97=2.002 case that the bwdif
-# bob output produces for interlaced sources). Otherwise fall back to mpv's
-# default `audio` sync — the manual calls it "the most robust mode" because
-# it makes no assumption about the display.
-#
-# Override either way via DVDPLAYER_VIDEO_SYNC=display-resample (force) or
-# DVDPLAYER_VIDEO_SYNC=audio (force).
-_MATCHED_VIDEO_SYNC = "display-resample"
-_FALLBACK_VIDEO_SYNC = "audio"
-_VIDEO_SYNC_RATIO_TOLERANCE = 0.01  # 1% — covers 23.976/24, 29.97/30, 59.94/60
 SMOOTH_FPS_FILTER = "fps=60000/1001"
 CABLE_SMOOTH_BLEND_FILTER = "lavfi=[tblend=all_mode=average]"
 _FFMPEG_FILTER_SUPPORT_CACHE: dict[str, bool] = {}
@@ -109,60 +88,20 @@ def _normalize_deinterlace_mode(value: object) -> str:
     return "weave"
 
 
-def _output_refresh_hz_for_mode(target_mode: Optional[str]) -> float:
-    """Best-effort display refresh rate (Hz) for a given DRM target mode.
+def _resolved_video_sync() -> str:
+    """Resolve the mpv `--video-sync` value, honouring an env-var override.
 
-    Used to decide whether `display-resample` is appropriate. The CRT modes
-    we use carry the rate in the mode name (`720x576i` = 50 Hz, anything
-    else NTSC = 60 Hz). When ``target_mode`` is ``None`` (LCD pipeline,
-    mpv autodetects the connector), assume 60 Hz — the common case for
-    modern panels and the value mpv would settle on at vsync detection
-    too. The 1% tolerance in ``_should_use_display_resample`` absorbs the
-    fractional difference (59.94 vs 60.000 etc.).
+    The fork default is ``audio`` (same as upstream mpv) because our earlier
+    experiments with ``display-resample`` regressed motion smoothness on the
+    Pi 4 / vc4 KMS DRM stack — see FORK_NOTES.md "Why we reverted to upstream
+    motion defaults". Users who want to try ``display-resample`` (smooth 60i
+    on matched output, but judder on 24p→60Hz pulldown) can set
+    ``DVDPLAYER_VIDEO_SYNC=display-resample`` on the launcher wrapper.
     """
-    if not target_mode:
-        return 60.0
-    if "576" in target_mode:
-        return 50.0
-    return 60.0
-
-
-def _should_use_display_resample(source_fps: Optional[float], output_hz: float) -> bool:
-    """Return True iff the output refresh is a near-integer multiple of source fps.
-
-    See the module-level comment on _MATCHED_VIDEO_SYNC for the rationale.
-    Returns False on unknown / invalid input so we fall back to the safe
-    `audio` sync (mpv's documented "most robust mode") instead of silently
-    enabling display-resample for sources we can't measure.
-    """
-    if not source_fps or source_fps <= 0 or output_hz <= 0:
-        return False
-    ratio = output_hz / source_fps
-    if ratio < 0.99:
-        # Output slower than source — display-resample would have to drop
-        # frames, audio sync is safer.
-        return False
-    nearest = round(ratio)
-    if nearest < 1:
-        return False
-    return abs(ratio - nearest) / nearest <= _VIDEO_SYNC_RATIO_TOLERANCE
-
-
-def _video_sync_for_source(source: PlaybackSource, target_mode: Optional[str]) -> str:
-    """Pick the right `--video-sync` value for this source / output pair.
-
-    Honours the ``DVDPLAYER_VIDEO_SYNC`` env var as a hard override. When
-    unset, returns `display-resample` for matching field rates (interlaced
-    60i → 60Hz output, 30p → 60Hz, 25p → 50Hz, 60p → 60Hz, 23.976→24, …)
-    and `audio` otherwise (24p → 60Hz judder, etc.).
-    """
-    forced = os.environ.get("DVDPLAYER_VIDEO_SYNC", "").strip().lower()
-    if forced in {"display-resample", "audio", "display-vdrop", "desync"}:
-        return forced
-    output_hz = _output_refresh_hz_for_mode(target_mode)
-    if _should_use_display_resample(source.hint_fps, output_hz):
-        return _MATCHED_VIDEO_SYNC
-    return _FALLBACK_VIDEO_SYNC
+    override = os.environ.get("DVDPLAYER_VIDEO_SYNC", "").strip().lower()
+    if override in {"audio", "display-resample", "display-vdrop", "desync"}:
+        return override
+    return "audio"
 
 
 def _ffmpeg_supports_filter(filter_name: str) -> bool:
@@ -612,20 +551,9 @@ def _resolve_drm_launch_target(target_mode: str, connector: str = RGBPI_CONNECTO
     return None
 
 
-def playback_profile_for_source(
-    source: PlaybackSource,
-    prefs: Optional[PlaybackPrefs] = None,
-    target_mode: Optional[str] = None,
-) -> PlaybackProfile:
-    """Resolve the playback profile (motion mode, video-sync, …) for a source.
-
-    ``target_mode`` is the DRM target mode (e.g. ``"720x480i"``) when known.
-    It's used by :func:`_video_sync_for_source` to pick ``display-resample``
-    vs ``audio`` based on field-rate matching — passing ``None`` is safe (we
-    assume 60 Hz output and gate accordingly).
-    """
+def playback_profile_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> PlaybackProfile:
     motion_mode = resolve_motion_mode(prefs)
-    video_sync = _video_sync_for_source(source, target_mode)
+    video_sync = _resolved_video_sync()
     if source.authored_dvd:
         return PlaybackProfile(
             motion_mode="authentic",
@@ -681,10 +609,12 @@ def audio_normalization_profile_for_source(
 
 def deinterlace_profile_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> tuple[str, Optional[str]]:
     del source  # Applies globally to all playback sources.
-    # bob with bwdif's deint=interlaced flag is safe for progressive frames
-    # (the filter passes them through unchanged) but eliminates the "comb"
-    # artifact when watching interlaced sources (DVD remuxes, broadcast TV).
-    configured = _normalize_deinterlace_mode(getattr(prefs, "deinterlace_mode", "bob"))
+    # Default is "weave" (no deinterlace) — matches upstream and is right for
+    # the CRT pipeline (the CRT scans interlaced fields natively, so no
+    # filter chain is needed and adding bwdif demonstrably regressed motion
+    # smoothness on the Pi 4 / vc4 KMS DRM stack). Users on a progressive
+    # display can opt in to "bob" via playback_prefs.json or the prefs UI.
+    configured = _normalize_deinterlace_mode(getattr(prefs, "deinterlace_mode", "weave"))
     if configured == "bob":
         return "bob", BOB_DEINTERLACE_FILTER
     return "weave", None
@@ -850,7 +780,7 @@ class PlaybackSession:
         ffplay: str,
     ) -> "PlaybackSession":
         target_mode = _target_mode_for_source(source, prefs)
-        profile = playback_profile_for_source(source, prefs, target_mode=target_mode)
+        profile = playback_profile_for_source(source, prefs)
         deinterlace_mode, _deinterlace_filter = deinterlace_profile_for_source(source, prefs)
         smooth_fps_filter = smooth_fps_filter_for_source(source, prefs)
         motion_vf_filter = motion_vf_filter_for_source(source, prefs)
@@ -864,8 +794,6 @@ class PlaybackSession:
             interpolation=profile.interpolation,
             tscale=profile.tscale,
             deinterlace_mode=deinterlace_mode,
-            source_fps=source.hint_fps,
-            output_hz=_output_refresh_hz_for_mode(target_mode),
             backend="ffplay",
         )
 
@@ -944,7 +872,7 @@ class PlaybackSession:
         drm_target: Optional[DrmLaunchTarget],
         prefer_drm: bool,
     ) -> subprocess.Popen:
-        profile = playback_profile_for_source(source, prefs, target_mode=target_mode)
+        profile = playback_profile_for_source(source, prefs)
         force_43 = force_43_for_source(source, prefs)
         normalization_mode, audio_filter = audio_normalization_profile_for_source(source, prefs)
         deinterlace_mode, deinterlace_filter = deinterlace_profile_for_source(source, prefs)
@@ -1060,8 +988,6 @@ class PlaybackSession:
             video_sync=profile.video_sync,
             interpolation=profile.interpolation,
             tscale=profile.tscale,
-            source_fps=source.hint_fps,
-            output_hz=_output_refresh_hz_for_mode(target_mode),
             force_43=force_43,
             volume_normalization=normalization_mode,
             audio_filter=audio_filter,

@@ -127,21 +127,45 @@ Lua scripts: the "client" is mpv itself, so the overlay lives forever.
 
 ## Local-only changes (not upstream-bound)
 
-These flip behaviour defaults that make sense on a CRT but might surprise a user running on a 1080p LCD. They live on `main` but were intentionally **not** PRified. See [`Local: flip playback defaults for CRT-first usage`](https://github.com/thecyril/rgbpi_mediaplayer/commit/833a892) for the actual diff.
+The fork currently keeps **only one** local default different from upstream:
 
 | Setting | Upstream default | Fork default | Why |
 |---|---|---|---|
-| `PlaybackPrefs.deinterlace_mode` | `weave` | `bob` | DVD remuxes show a visible comb artifact with `weave`. The `bwdif … deint=interlaced` filter passes progressive frames through unchanged, so this is safe on every source. |
-| `PlaybackProfile.video_sync` | `audio` (always) | `display-resample` *only when output Hz is a near-integer multiple of source fps*; `audio` otherwise | Initial flip to `display-resample` for every source caused visible **judder on progressive 24p/23.976 content** at 60 Hz output (the mpv manual confirms: *"playing 24 fps video on a 60 Hz screen will play video in a 2-3-2-3-... pattern"*). The Pi's vc4 KMS adds inaccurate display-fps reporting on top of that. We now gate `display-resample` on field-rate matching via `_video_sync_for_source()`: 60i/30p/60p → 60Hz output and 25p/50p → 50Hz output get `display-resample` (smooth, as in the original 480i tests); 24p → 60Hz and similar non-matching ratios fall back to `audio` (mpv's documented "most robust mode"). Force either way via `DVDPLAYER_VIDEO_SYNC=display-resample` / `=audio`. |
-| `BOB_DEINTERLACE_FILTER` `mode=` | `send_field` | `send_frame` (env-overridable) | `send_field` outputs 60 progressive frames per second, doubling the VO thread's CPU cost. On a CRT 60 Hz interlaced display both modes look identical; halving the cost gives ~50 % more headroom on the Pi 4's VO thread, killing the residual jitter on MPEG-2 SD content. Override with `DVDPLAYER_BWDIF_MODE=send_field` on a progressive LCD setup. |
 | `mpv --osd-font-size` | `36` *(from PR #4 once merged)* | `36` (same) | Same as PR #4 — the original `24` was ~8 px on a 240p output (illegible) and `65` (an earlier revision of PR #4) overflowed the 11-row START overlay on 240p. `36` lands ~12 px on 240p, ~24 px on 480i, ~54 px on 1080p. |
 
-### Reverting per-user
+### Reverted: motion defaults flip (commit 833a892 / merge c20029e + gating 0d7e2cd)
 
-- `playback_prefs.json` — edit `"deinterlace_mode"` back to `"weave"` to disable bob deinterlace.
-- `DVDPLAYER_BWDIF_MODE=send_field` (env var, set in the launcher wrapper) — restore 60 fps progressive deinterlace.
-- `DVDPLAYER_VIDEO_SYNC=audio` (env var) — force `audio` sync globally; bypass the gating that picks `display-resample` for matched field rates.
-- `DVDPLAYER_VIDEO_SYNC=display-resample` (env var) — force `display-resample` everywhere; useful for testing.
+We previously flipped `PlaybackPrefs.deinterlace_mode` to `bob` and the global
+`--video-sync` to `display-resample` (later: gated `display-resample` on
+field-rate matching), thinking those were the right CRT-friendly defaults.
+**A back-to-back A/B against upstream main showed those defaults clearly
+regressed motion smoothness on the Pi 4 / vc4 KMS DRM pipeline**, on both 480i
+and 480p content. We reverted to the upstream behaviour. Likely culprits:
+
+- `bob` adds `bwdif` to the filter chain *unconditionally*. Even though
+  `deint=interlaced` passes progressive frames through, just having the
+  filter in the graph adds a pipeline stage that introduces frame-time
+  micro-variability. On a 480i source going to a 480i CRT output, the
+  upstream `weave` path (`decode → scale → output`, no filter) is
+  field-perfect — the CRT scans the interlaced fields natively.
+- `display-resample` relies on the reported display-fps, which is
+  documented as inaccurate on vc4 KMS DRM (raspberrypi/firmware#960).
+  Empirically the math we relied on (the wiki's "zero dropped/duplicated
+  frames" promise on matching ratios) doesn't hold on this hardware.
+  Audio sync — mpv's default and the manual's "most robust mode" — is
+  smoother in practice.
+
+### Reverting per-user (escape hatches for the per-session knobs we kept)
+
+- `playback_prefs.json` — set `"deinterlace_mode": "bob"` (or via the prefs
+  UI) to enable bwdif. Defaults to `"weave"`.
+- `DVDPLAYER_BWDIF_MODE=send_frame` (env var) — when bob is enabled,
+  halve the VO thread cost at the price of losing the doubled 60p motion
+  cadence. Defaults to `"send_field"` (upstream behaviour, smoother 60p
+  on progressive displays).
+- `DVDPLAYER_VIDEO_SYNC=display-resample` (env var) — force
+  `display-resample` per session for users who want to test it on a
+  fixed-rate LCD setup. Defaults to `"audio"`.
 
 ---
 
@@ -192,4 +216,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 25 mai 2026 (HUD branch validated on the Pi)._
+_Last updated: 25 mai 2026 (reverted motion defaults to upstream after A/B comparison)._
