@@ -132,7 +132,7 @@ These flip behaviour defaults that make sense on a CRT but might surprise a user
 | Setting | Upstream default | Fork default | Why |
 |---|---|---|---|
 | `PlaybackPrefs.deinterlace_mode` | `weave` | `bob` | DVD remuxes show a visible comb artifact with `weave`. The `bwdif … deint=interlaced` filter passes progressive frames through unchanged, so this is safe on every source. |
-| `PlaybackProfile.video_sync` | `audio` | `display-resample` | `audio` sync occasionally drops a frame when the source frame rate doesn't divide the display refresh. `display-resample` resamples audio (≪ 0.1 % pitch shift, inaudible) and pins each video frame to a fresh vblank — visibly smoother. Held in a single `_DEFAULT_VIDEO_SYNC` constant so the four `PlaybackProfile` sites share one value. |
+| `PlaybackProfile.video_sync` | `audio` (always) | `display-resample` *only when output Hz is a near-integer multiple of source fps*; `audio` otherwise | Initial flip to `display-resample` for every source caused visible **judder on progressive 24p/23.976 content** at 60 Hz output (the mpv manual confirms: *"playing 24 fps video on a 60 Hz screen will play video in a 2-3-2-3-... pattern"*). The Pi's vc4 KMS adds inaccurate display-fps reporting on top of that. We now gate `display-resample` on field-rate matching via `_video_sync_for_source()`: 60i/30p/60p → 60Hz output and 25p/50p → 50Hz output get `display-resample` (smooth, as in the original 480i tests); 24p → 60Hz and similar non-matching ratios fall back to `audio` (mpv's documented "most robust mode"). Force either way via `DVDPLAYER_VIDEO_SYNC=display-resample` / `=audio`. |
 | `BOB_DEINTERLACE_FILTER` `mode=` | `send_field` | `send_frame` (env-overridable) | `send_field` outputs 60 progressive frames per second, doubling the VO thread's CPU cost. On a CRT 60 Hz interlaced display both modes look identical; halving the cost gives ~50 % more headroom on the Pi 4's VO thread, killing the residual jitter on MPEG-2 SD content. Override with `DVDPLAYER_BWDIF_MODE=send_field` on a progressive LCD setup. |
 | `mpv --osd-font-size` | `36` *(from PR #4 once merged)* | `36` (same) | Same as PR #4 — the original `24` was ~8 px on a 240p output (illegible) and `65` (an earlier revision of PR #4) overflowed the 11-row START overlay on 240p. `36` lands ~12 px on 240p, ~24 px on 480i, ~54 px on 1080p. |
 
@@ -140,7 +140,8 @@ These flip behaviour defaults that make sense on a CRT but might surprise a user
 
 - `playback_prefs.json` — edit `"deinterlace_mode"` back to `"weave"` to disable bob deinterlace.
 - `DVDPLAYER_BWDIF_MODE=send_field` (env var, set in the launcher wrapper) — restore 60 fps progressive deinterlace.
-- `_DEFAULT_VIDEO_SYNC` constant in `session.py` — change to `"audio"` if `display-resample` ever causes a regression.
+- `DVDPLAYER_VIDEO_SYNC=audio` (env var) — force `audio` sync globally; bypass the gating that picks `display-resample` for matched field rates.
+- `DVDPLAYER_VIDEO_SYNC=display-resample` (env var) — force `display-resample` everywhere; useful for testing.
 
 ---
 
