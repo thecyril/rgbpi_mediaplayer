@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from dvdplayer_python.core.debuglog import log_event
+
 # -- Overlay slot ---------------------------------------------------------------
 # OVERLAY_MAIN_ID (1) and OVERLAY_BADGE_ID (2) are taken by playback.session.
 # Pick a separate id so the HUD never fights with badge/info overlays.
@@ -162,6 +164,10 @@ class PlaybackHUD:
         self._autohide_seconds = float(autohide_seconds)
         self._state = HUDState(title=str(title or ""))
         self._closed = False
+        # Log the first IPC failure so a silent "HUD not appearing" bug can
+        # be diagnosed from the debug log without rebuilding. Subsequent
+        # failures stay silent to avoid log spam.
+        self._error_logged = False
 
     # -- Public API ----------------------------------------------------------
 
@@ -233,6 +239,11 @@ class PlaybackHUD:
         if payload == self._state.last_payload:
             self._state.last_refreshed_at = now
             return
+        # mpv 0.32 (which is what the bundled binary on the Pi runs) accepts
+        # exactly 6 positional args after the command name: id, format, data,
+        # res_x, res_y, z. The `hidden` / `compute_bounds` flags were added
+        # later (>=0.34); passing them here makes 0.32 reject the whole
+        # command silently, hence no overlay.
         try:
             self._send(
                 [
@@ -243,17 +254,19 @@ class PlaybackHUD:
                     0,              # res_x = 0 → auto-aspect, lets mpv compute
                     _HUD_RES_Y,
                     0,              # z-order
-                    False,          # hidden
-                    False,          # compute_bounds
                 ]
             )
-        except Exception:
+        except Exception as exc:
+            if not self._error_logged:
+                log_event("playback_hud_render_failed", error=str(exc))
+                self._error_logged = True
             # mpv may be shutting down — don't leak into the main loop.
             return
         self._state.last_payload = payload
         self._state.last_refreshed_at = now
 
     def _clear_overlay(self) -> None:
+        # Hiding == replacing the overlay with format="none" + empty data.
         try:
             self._send(
                 [
@@ -264,8 +277,6 @@ class PlaybackHUD:
                     0,
                     _HUD_RES_Y,
                     0,
-                    True,
-                    False,
                 ]
             )
         except Exception:
