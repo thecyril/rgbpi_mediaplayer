@@ -863,10 +863,12 @@ class PlaybackSession:
         # output window height. Setting the values below to a fixed 720-base
         # therefore keeps the same screen-relative size on a 240p CRT, on a
         # 480i interlaced output and on a 1080p TV:
-        #   sub font   = 11% × 720 = 79
-        #   osd font   =  9% × 720 = 65
-        #   sub margin =  6% × 720 = 43
-        #   sub border = 720 / 180 = 4
+        #   sub font   = 11%  × 720 = 79
+        #   osd font   = 5%   × 720 = 36 (1.5x the upstream default; kept
+        #                                lower than subs so the 11-row START
+        #                                menu overlay stays compact on 240p)
+        #   sub margin = 6%   × 720 = 43
+        #   sub border = 720  / 180 = 4
         args = [
             mpv,
             "--fs",
@@ -877,7 +879,7 @@ class PlaybackSession:
             "--osd-level=0",
             "--osd-align-x=center",
             "--osd-align-y=center",
-            "--osd-font-size=65",
+            "--osd-font-size=36",  # 5% of 720 baseline; mpv scales to ~12px on 240p (1.5x the upstream default 24, comfortably readable, START menu stays under 75% of the screen)
             "--osd-margin-y=0",
             "--sub-auto=no",
             "--sub-font-size=79",
