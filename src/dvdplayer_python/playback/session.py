@@ -158,8 +158,16 @@ def _is_ntsc_rate(fps: float) -> bool:
 def _desired_output_mode(width: int, height: int, fps: Optional[float]) -> Optional[str]:
     if width <= 400 and height <= 300:
         return None
+    # Film rate (23.976 / 24 fps) goes to **NTSC 60Hz**. Routing it to PAL
+    # 50Hz (the previous default) produced a ratio of 50/23.976 = 2.085,
+    # i.e. an irregular 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence with a hiccup
+    # every ~12 frames — clearly visible as judder. 60Hz gives the
+    # classical 2:3 pulldown (60/23.976 = 2.503), a strictly alternating
+    # 2-3-2-3 pattern that 70 years of film-on-TV trained our eyes to
+    # tolerate. Verified visually on the Pi (Sony PVM, Dragon Ball Z 24p):
+    # the 2:3 pulldown is noticeably smoother than the PAL routing.
     if fps is not None and _is_film_rate(fps):
-        return "720x576i"
+        return "720x480i"
     if fps is not None and _is_pal_rate(fps):
         return "720x576i"
     if fps is not None and _is_ntsc_rate(fps):

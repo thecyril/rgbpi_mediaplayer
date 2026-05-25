@@ -127,11 +127,12 @@ Lua scripts: the "client" is mpv itself, so the overlay lives forever.
 
 ## Local-only changes (not upstream-bound)
 
-The fork currently keeps **only one** local default different from upstream:
+The fork currently keeps these local defaults different from upstream:
 
 | Setting | Upstream default | Fork default | Why |
 |---|---|---|---|
 | `mpv --osd-font-size` | `36` *(from PR #4 once merged)* | `36` (same) | Same as PR #4 — the original `24` was ~8 px on a 240p output (illegible) and `65` (an earlier revision of PR #4) overflowed the 11-row START overlay on 240p. `36` lands ~12 px on 240p, ~24 px on 480i, ~54 px on 1080p. |
+| `_desired_output_mode` routing for 23.976 / 24 fps source | `720x576i` (PAL 50Hz) | `720x480i` (NTSC 60Hz) | Upstream routes film-rate to PAL, which gives `50 / 23.976 = 2.085` — an **irregular** 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence with a visible hiccup every ~12 frames (≈ 500 ms). NTSC 60Hz gives `60 / 23.976 = 2.503` — strictly alternating **2:3 pulldown**, the cadence cinema-to-TV has used since the 1950s. Verified visually on a Sony PVM playing a 23.976 fps anime master: the NTSC routing is noticeably smoother. Could be upstreamed; left local for now because we want more A/B testing on PAL-region hardware first. |
 
 ### Reverted: motion defaults flip (commit 833a892 / merge c20029e + gating 0d7e2cd)
 
