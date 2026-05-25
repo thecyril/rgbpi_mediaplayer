@@ -162,20 +162,30 @@ def _pal_speedup_enabled() -> bool:
     return os.environ.get("DVDPLAYER_PAL_SPEEDUP", "1") != "0"
 
 
-def _pal_speedup_factor(fps: Optional[float]) -> Optional[float]:
+def _pal_speedup_factor(fps: Optional[float], target_mode: Optional[str]) -> Optional[float]:
     """Return the ``--speed`` factor for PAL speedup, or ``None`` if N/A.
 
-    Returns ``None`` unless the feature is enabled, the fps is known, and
-    the fps matches "film rate" (23.976 / 24). The caller is responsible
-    for also setting ``--audio-pitch-correction=no`` so the audio pitch
-    follows the speed change (otherwise mpv would resample to keep pitch
-    constant and you'd hear the resampler artifacts instead).
+    Returns ``None`` unless **all** of:
+      - the feature is enabled (``DVDPLAYER_PAL_SPEEDUP`` unset or "1");
+      - the source fps is known and matches film rate (23.976 / 24);
+      - the **output target is PAL 50 Hz** (target_mode == "720x576i") —
+        critical, because the whole point of the speedup is to convert
+        24 → 25 → 1:2 clean at 50 Hz. On an LCD or other 60 Hz output,
+        25 fps on 60 Hz gives ratio 2.4 (a *worse* cadence than the
+        native 23.976 → 60 Hz 2:3 pulldown). Without this gate we'd
+        actively make things worse on the LCD pipeline.
+
+    The caller is responsible for setting ``--audio-pitch-correction=no``
+    when applying the returned speed (otherwise mpv would resample audio
+    to keep pitch constant, defeating the purpose).
     """
     if not _pal_speedup_enabled():
         return None
     if fps is None or fps <= 0:
         return None
     if not _is_film_rate(fps):
+        return None
+    if target_mode != "720x576i":
         return None
     return 25.0 / float(fps)
 
@@ -1006,7 +1016,15 @@ class PlaybackSession:
             args.append(f"--monitorpixelaspect={monitor_pixel_aspect:.7f}")
 
         # PAL speedup for film-rate sources (see _pal_speedup_factor).
-        speedup = _pal_speedup_factor(source.hint_fps)
+        # Gated on prefer_drm + drm_target so we only apply it when the
+        # output is *confirmed* to be PAL 50 Hz (--drm-mode=720x576@50).
+        # On the LCD pipeline (no drm_target, legacy fallback) the
+        # native output is usually 60 Hz, where 25 fps would give a
+        # worse cadence than the source's native 23.976 → 2:3 pulldown.
+        if prefer_drm and drm_target:
+            speedup = _pal_speedup_factor(source.hint_fps, target_mode)
+        else:
+            speedup = None
         if speedup is not None:
             args.append(f"--speed={speedup:.6f}")
             # Let audio pitch follow the speed change (default is "yes" =
