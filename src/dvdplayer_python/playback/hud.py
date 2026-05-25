@@ -188,17 +188,20 @@ class PlaybackHUD:
         if self._closed:
             return
         ts = float(now if now is not None else time.time())
+        was_visible = self._state.visible
         self._state.last_shown_at = ts
         self._state.visible = True
         self._refresh_state()
         self._render()
+        log_event("playback_hud_flash", was_visible=was_visible)
 
-    def hide(self, *, now: Optional[float] = None) -> None:
+    def hide(self, *, now: Optional[float] = None, reason: str = "manual") -> None:
         """Remove the HUD from the screen if it is currently visible."""
         if self._closed or not self._state.visible:
             return
         self._state.visible = False
         self._clear_overlay()
+        log_event("playback_hud_hide", reason=reason)
 
     def tick(self, now: float) -> None:
         """Called from the main loop. Handles auto-hide only — no refresh.
@@ -211,7 +214,7 @@ class PlaybackHUD:
         if self._closed or not self._state.visible:
             return
         if now - self._state.last_shown_at >= self._autohide_seconds:
-            self.hide(now=now)
+            self.hide(now=now, reason="autohide")
 
     def close(self) -> None:
         """Idempotent teardown. Removes the overlay and disables the HUD."""
