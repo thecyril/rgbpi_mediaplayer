@@ -132,7 +132,7 @@ The fork currently keeps these local defaults different from upstream:
 | Setting | Upstream default | Fork default | Why |
 |---|---|---|---|
 | `mpv --osd-font-size` | `36` *(from PR #4 once merged)* | `36` (same) | Same as PR #4 — the original `24` was ~8 px on a 240p output (illegible) and `65` (an earlier revision of PR #4) overflowed the 11-row START overlay on 240p. `36` lands ~12 px on 240p, ~24 px on 480i, ~54 px on 1080p. |
-| `_desired_output_mode` routing for 23.976 / 24 fps source | `720x576i` (PAL 50Hz) | `720x480i` (NTSC 60Hz) | Upstream routes film-rate to PAL, which gives `50 / 23.976 = 2.085` — an **irregular** 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence with a visible hiccup every ~12 frames (≈ 500 ms). NTSC 60Hz gives `60 / 23.976 = 2.503` — strictly alternating **2:3 pulldown**, the cadence cinema-to-TV has used since the 1950s. Verified visually on a Sony PVM playing a 23.976 fps anime master: the NTSC routing is noticeably smoother. Could be upstreamed; left local for now because we want more A/B testing on PAL-region hardware first. |
+| Film-rate handling (23.976 / 24 fps source) | `720x576i` (PAL 50Hz) at native speed → ratio 2.085 → **irregular** 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence (hiccup every ~12 frames, very visible judder) | **PAL speedup** by default: `720x576i` (PAL 50Hz) **+ `--speed=25/src_fps` + `--audio-pitch-correction=no`** → effective rate 25 fps, ratio `50/25 = 2.000` exact → **perfect 1:2 cadence, zero judder**. Audio is pitched +4 % (~0.7 semitones up) as a side effect — the same shift every European broadcast of a Hollywood film used from 1960 to ~2010. Override: `DVDPLAYER_PAL_SPEEDUP=0` falls back to NTSC 60Hz routing (`720x480i`, ratio `60/23.976 = 2.503` → regular 2:3 pulldown, audio at correct pitch). |
 
 ### Reverted: motion defaults flip (commit 833a892 / merge c20029e + gating 0d7e2cd)
 
@@ -167,6 +167,10 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
 - `DVDPLAYER_VIDEO_SYNC=display-resample` (env var) — force
   `display-resample` per session for users who want to test it on a
   fixed-rate LCD setup. Defaults to `"audio"`.
+- `DVDPLAYER_PAL_SPEEDUP=0` (env var) — disable PAL speedup for film
+  rate sources. Falls back to NTSC 60Hz / 2:3 pulldown for 23.976 / 24
+  fps content. Useful if you find the +4 % audio pitch shift annoying
+  on music-heavy content. Default: speedup enabled.
 
 ---
 

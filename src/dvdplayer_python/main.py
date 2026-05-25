@@ -1472,9 +1472,21 @@ class App:
         tv_resolution = str(tv_mode or "UNKNOWN").upper()
         video_fps_raw = self._read_playback_property("container-fps") or self._read_playback_property("estimated-vf-fps")
         try:
-            video_fps = f"{float(video_fps_raw):.3f}"
+            video_fps_value = float(video_fps_raw)
+            video_fps = f"{video_fps_value:.3f}"
         except (TypeError, ValueError):
+            video_fps_value = None
             video_fps = "UNKNOWN"
+        # If mpv is playing the source at a non-1.0 speed (e.g. PAL speedup
+        # for 23.976 → 25 fps), annotate the effective rate so the user
+        # doesn't think the source fps reported above is what is actually
+        # hitting the display.
+        try:
+            speed_value = float(self._read_playback_property("speed") or 1.0)
+        except (TypeError, ValueError):
+            speed_value = 1.0
+        if video_fps_value and abs(speed_value - 1.0) > 0.005:
+            video_fps = f"{video_fps:s} (×{speed_value:.4f} → {video_fps_value * speed_value:.3f})"
         tv_hz = self._current_tv_hz_label()
         interpolation_type = self._current_interpolation_type()
         rows = [

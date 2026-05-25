@@ -146,6 +146,40 @@ def _is_film_rate(fps: float) -> bool:
     return abs(fps - 23.976) < 0.2 or abs(fps - 24.0) < 0.2
 
 
+def _pal_speedup_enabled() -> bool:
+    """Is the European "PAL speedup" trick allowed for film-rate sources?
+
+    When enabled (default), 23.976 / 24 fps sources are routed to PAL 50 Hz
+    output AND played at exactly 25 fps via ``--speed=25/src_fps``, giving
+    a mathematically perfect 1:2 vsync cadence (zero judder). Audio is
+    pitched +4 % (~0.7 semitones) as a side effect — the same shift every
+    European TV broadcast of a Hollywood film used from 1960 to 2010.
+
+    Set ``DVDPLAYER_PAL_SPEEDUP=0`` to disable, in which case film rate
+    falls back to NTSC 60 Hz with the classical 2:3 pulldown (regular
+    judder, audio at correct pitch). See FORK_NOTES "Film-rate handling".
+    """
+    return os.environ.get("DVDPLAYER_PAL_SPEEDUP", "1") != "0"
+
+
+def _pal_speedup_factor(fps: Optional[float]) -> Optional[float]:
+    """Return the ``--speed`` factor for PAL speedup, or ``None`` if N/A.
+
+    Returns ``None`` unless the feature is enabled, the fps is known, and
+    the fps matches "film rate" (23.976 / 24). The caller is responsible
+    for also setting ``--audio-pitch-correction=no`` so the audio pitch
+    follows the speed change (otherwise mpv would resample to keep pitch
+    constant and you'd hear the resampler artifacts instead).
+    """
+    if not _pal_speedup_enabled():
+        return None
+    if fps is None or fps <= 0:
+        return None
+    if not _is_film_rate(fps):
+        return None
+    return 25.0 / float(fps)
+
+
 def _is_ntsc_rate(fps: float) -> bool:
     return (
         abs(fps - 29.97) < 0.2
@@ -158,16 +192,27 @@ def _is_ntsc_rate(fps: float) -> bool:
 def _desired_output_mode(width: int, height: int, fps: Optional[float]) -> Optional[str]:
     if width <= 400 and height <= 300:
         return None
-    # Film rate (23.976 / 24 fps) goes to **NTSC 60Hz**. Routing it to PAL
-    # 50Hz (the previous default) produced a ratio of 50/23.976 = 2.085,
-    # i.e. an irregular 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence with a hiccup
-    # every ~12 frames — clearly visible as judder. 60Hz gives the
-    # classical 2:3 pulldown (60/23.976 = 2.503), a strictly alternating
-    # 2-3-2-3 pattern that 70 years of film-on-TV trained our eyes to
-    # tolerate. Verified visually on the Pi (Sony PVM, Dragon Ball Z 24p):
-    # the 2:3 pulldown is noticeably smoother than the PAL routing.
+    # Film rate (23.976 / 24 fps): the cadence is the hard problem here
+    # because neither 50 nor 60 divides evenly. Two strategies:
+    #
+    #   PAL speedup ON  (default, DVDPLAYER_PAL_SPEEDUP unset or "1"):
+    #     → 720x576i (PAL 50Hz). Combined with --speed=25/src_fps in
+    #       _spawn_mpv, the effective rate is exactly 25 fps and the
+    #       ratio 50/25 = 2.000 gives a perfect 1:2 cadence (zero
+    #       judder). Audio is pitched +4% as a side effect.
+    #
+    #   PAL speedup OFF (DVDPLAYER_PAL_SPEEDUP=0):
+    #     → 720x480i (NTSC 60Hz). Ratio 60/23.976 = 2.503 → strictly
+    #       alternating 2-3 pulldown. Regular judder ("film look"),
+    #       audio at original pitch.
+    #
+    # Both strategies are explicitly chosen — *not* the upstream default,
+    # which was 720x576i without speedup, giving ratio 2.085 = an
+    # irregular 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence (a hiccup every ~12
+    # frames). That irregular cadence is what the user was reporting as
+    # "ça jitter" and is the worst of the three options.
     if fps is not None and _is_film_rate(fps):
-        return "720x480i"
+        return "720x576i" if _pal_speedup_enabled() else "720x480i"
     if fps is not None and _is_pal_rate(fps):
         return "720x576i"
     if fps is not None and _is_ntsc_rate(fps):
@@ -960,6 +1005,16 @@ class PlaybackSession:
         if monitor_pixel_aspect is not None:
             args.append(f"--monitorpixelaspect={monitor_pixel_aspect:.7f}")
 
+        # PAL speedup for film-rate sources (see _pal_speedup_factor).
+        speedup = _pal_speedup_factor(source.hint_fps)
+        if speedup is not None:
+            args.append(f"--speed={speedup:.6f}")
+            # Let audio pitch follow the speed change (default is "yes" =
+            # mpv resamples to keep original pitch, which would defeat the
+            # whole point: we *want* the +4 % pitch shift because the
+            # smooth 1:2 cadence is the trade we're making for it).
+            args.append("--audio-pitch-correction=no")
+
         if prefer_drm and drm_target and target_mode:
             args += [
                 "--vo=drm",
@@ -1003,6 +1058,8 @@ class PlaybackSession:
             deinterlace_filter=deinterlace_filter,
             smooth_fps_filter=smooth_fps_filter,
             motion_vf_filter=motion_vf_filter,
+            pal_speedup=speedup,
+            source_fps=source.hint_fps,
         )
         log_event(
             "mpv_spawn",
