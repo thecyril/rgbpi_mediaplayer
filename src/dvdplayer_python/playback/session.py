@@ -1744,11 +1744,28 @@ class PlaybackSession:
     def _osd_display_aspect(self) -> Optional[float]:
         """Display aspect of mpv's current OSD, or ``None`` if unknown.
 
-        Computed as ``osd-width * osd-par / osd-height`` so it stays
-        correct on non-square-pixel modes (e.g. 720×480 stretched to a
-        4:3 CRT). The HUD uses this to size its 720-baseline canvas so
-        the layout renders proportionally on 4:3 CRT outputs as well as
-        16:9 LCDs.
+        Computed as ``osd-width / (osd-height * osd-par)``.
+
+        The unintuitive bit is the *inverse* placement of ``osd-par``: mpv
+        does NOT follow the classical PAR convention (``pixel_width /
+        pixel_height``). Empirically on this codebase's NTSC pipeline,
+        ``--monitorpixelaspect=0.8889`` makes mpv report
+        ``osd-par = 1.125 = 1/0.8889`` — i.e. mpv's osd-par is the
+        *vertical stretch factor* needed to convert the OSD pixel
+        buffer into a square-pixel display, equivalently
+        ``pixel_height / pixel_width``.
+
+        So for our 720×480 NTSC output:
+
+          aspect = 720 / (480 * 1.125) = 720 / 540 = 1.333  → 4:3 ✓
+
+        Cross-checked against the actual mpv screenshot file dimensions
+        on the user's pipeline (720×539, ratio 1.336), and against the
+        16:9 LCD pipeline (osd-par = 1.0, so the formula collapses to
+        ``w/h`` and gives 1.778 = 16:9 as expected).
+
+        The HUD uses this to size its 720-baseline canvas so the layout
+        renders proportionally on 4:3 CRT outputs as well as 16:9 LCDs.
         """
         if self.backend != "mpv":
             return None
@@ -1774,7 +1791,7 @@ class PlaybackSession:
             par = 1.0
         if par <= 0:
             par = 1.0
-        return (fw * par) / fh
+        return fw / (fh * par)
 
     def clear_overlays(self) -> None:
         """Hide every transient overlay drawn on top of the video.
