@@ -162,12 +162,14 @@ class PlaybackHUD:
             ``duration_s`` may be ``None`` when mpv has not reported a
             duration yet (e.g. live streams).
         get_canvas_aspect: Optional callable returning the OSD output's
-            display aspect ratio (``width * par / height``). When provided
-            (and returning a positive float), the HUD recomputes its
-            canvas width on every flash so the 720-line baseline layout
-            stays proportional on 4:3 CRT modes as well as 16:9 LCDs.
-            Returning ``None`` (or omitting the callable) keeps the
-            previous 1280×720 baseline.
+            display aspect ratio (``width / (height * par)`` — see
+            :meth:`PlaybackSession._osd_display_aspect` for why
+            ``osd-par`` is *inverse* of the classical PAR convention in
+            mpv). When provided (and returning a positive float), the
+            HUD recomputes its canvas width on every flash so the
+            720-line baseline layout stays proportional on 4:3 CRT
+            modes as well as 16:9 LCDs. Returning ``None`` (or omitting
+            the callable) keeps the previous 1280×720 baseline.
         title:       Initial media title.
         autohide_seconds: Time after last activity before the HUD auto-hides.
     """
