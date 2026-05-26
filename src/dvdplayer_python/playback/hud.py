@@ -365,22 +365,22 @@ class PlaybackHUD:
                 self._draw_rect(bar_x0, _BAR_Y, bar_x0 + filled_w, _BAR_Y + _BAR_HEIGHT, _COL_FILL)
             )
 
-        # Playhead knob (only when we have a real duration).
-        #
-        # Rendered as a "●" character anchored center (\an5\pos(cx, cy))
-        # rather than a drawing-mode rectangle. Background: the previous
-        # _draw_rect(knob_cx - r, ..., knob_cx + r, ...) approach relied on
-        # libass interpreting \an7\pos for *drawings* the same way it does
-        # for text (i.e. pos = top-left of the bounding box), but some
-        # libass builds shipped with mpv 0.32 anchor the rendered drawing
-        # at its path origin instead, shifting the knob ~r units left of
-        # where the layout expected. Text rendering's \an semantics are
-        # well-tested and consistent across libass versions, so this path
-        # is the safer one for positional pixel-accuracy.
+        # Playhead knob (only when we have a real duration). User-preferred
+        # square design via drawing-mode (matches the bar's rendering
+        # primitive — same _draw_rect path, same anchor semantics, so any
+        # bug in libass affects both identically and they stay aligned).
         if dur and dur > 0:
             knob_cx = bar_x0 + filled_w
             knob_cy = _BAR_Y + _BAR_HEIGHT // 2
-            events.append(self._draw_knob(knob_cx, knob_cy, _KNOB_RADIUS, _COL_FILL))
+            events.append(
+                self._draw_rect(
+                    knob_cx - _KNOB_RADIUS,
+                    knob_cy - _KNOB_RADIUS,
+                    knob_cx + _KNOB_RADIUS,
+                    knob_cy + _KNOB_RADIUS,
+                    _COL_FILL,
+                )
+            )
 
         # Bottom row: time on the left, hint on the right.
         events.append(
@@ -419,28 +419,6 @@ class PlaybackHUD:
             f"{{\\an{align}\\pos({x},{y})"
             f"\\fs{size}{colour}{_BORDER}}}"
             f"{body}"
-        )
-
-    @staticmethod
-    def _draw_knob(cx: int, cy: int, radius: int, colour: str) -> str:
-        """Render the playhead as a filled "●" glyph centered on (cx, cy).
-
-        Uses ``\\an5\\pos`` (centre-anchor text positioning) which is
-        unambiguous across libass versions, vs. drawing-mode + ``\\an7``
-        which had subtle anchor-interpretation differences in older
-        libass releases. Font size is calibrated so the glyph's visible
-        diameter ≈ 2 × ``radius`` in the OSD canvas — the "●" glyph
-        occupies roughly ⅗ of its em square in DejaVu / Roboto, so
-        ``fs = radius * 2 / 0.6 ≈ radius * 3.3``. A thin black border
-        keeps the knob visible against the white-fill portion of the bar.
-        """
-        if radius <= 0:
-            return ""
-        size = max(1, int(round(radius * 3.3)))
-        return (
-            f"{{\\an5\\pos({cx},{cy})\\fs{size}{colour}"
-            f"\\bord2\\3c&H000000&\\3a&H00&\\shad0}}"
-            f"●"
         )
 
     @staticmethod
