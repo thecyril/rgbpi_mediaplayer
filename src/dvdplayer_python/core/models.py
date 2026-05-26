@@ -163,6 +163,7 @@ class PlaybackPrefs:
     deinterlace_mode: str = "weave"
     pal_speedup: bool = True
     ntsc_speedup: bool = True
+    subtitle_scale: float = 1.0
 
 
 def app_dir() -> Path:

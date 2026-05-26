@@ -186,6 +186,14 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
   process. We deliberately bypass `default` (which routes through
   `plug → sysdefault:0`, where ALSA's linear-interpolation
   resampler audibly degrades the sound).
+- **SUB SIZE** (in the SUBTITLE playback menu, accessed via START
+  during playback) — LEFT/RIGHT adjusts subtitle scale in 0.1
+  steps over the range 0.5×–2.0×. ACCEPT resets to 1.0×. Persisted
+  as `"subtitle_scale"` in `playback_prefs.json`. Env override:
+  `DVDPLAYER_SUB_SCALE=<value>`. The mpv flag underneath is
+  `--sub-scale`; note that mpv applies it to plain-text subs
+  (SRT, VOBSUB) but **not** to ASS subs by default — stylised
+  ASS subtitles will keep their authored size.
 
 ---
 

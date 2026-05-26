@@ -174,6 +174,43 @@ def _resolve_alsa_device() -> str:
     return override or "hw:0,0"
 
 
+# Subtitle scale (user-adjustable in the SUBTITLE playback menu).
+# Range is bounded so the menu can't push the user into an unreadable
+# or screen-overflowing state. Sub-scale is a *multiplier* applied to
+# --sub-font-size=79 — so 1.0 = 79 (current behaviour), 0.5 = ~40 (small
+# but readable on 1080p), 2.0 = 158 (huge on 240p, useful at distance).
+# Step is 0.1 = 10% increment per LEFT/RIGHT press.
+SUBTITLE_SCALE_MIN = 0.5
+SUBTITLE_SCALE_MAX = 2.0
+SUBTITLE_SCALE_STEP = 0.1
+SUBTITLE_SCALE_DEFAULT = 1.0
+
+
+def _clamp_subtitle_scale(value: object, default: float = SUBTITLE_SCALE_DEFAULT) -> float:
+    """Coerce ``value`` to a float and clamp it to the allowed range.
+
+    Robust against hand-edited prefs files (string, None, out-of-range
+    numbers all collapse to a sane value).
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v != v:  # NaN check
+        return default
+    return max(SUBTITLE_SCALE_MIN, min(SUBTITLE_SCALE_MAX, v))
+
+
+def _resolve_subtitle_scale(prefs: Optional[PlaybackPrefs] = None) -> float:
+    """Return the subtitle scale to apply on launch (env > prefs > 1.0)."""
+    override = os.environ.get("DVDPLAYER_SUB_SCALE", "").strip()
+    if override:
+        return _clamp_subtitle_scale(override)
+    if prefs is not None:
+        return _clamp_subtitle_scale(getattr(prefs, "subtitle_scale", SUBTITLE_SCALE_DEFAULT))
+    return SUBTITLE_SCALE_DEFAULT
+
+
 def _resolve_bool_pref(
     env_var: str,
     pref_name: str,
@@ -1114,6 +1151,7 @@ class PlaybackSession:
             "--osd-margin-y=0",
             "--sub-auto=no",
             "--sub-font-size=79",
+            f"--sub-scale={_resolve_subtitle_scale(prefs):.2f}",
             "--sub-margin-y=43",
             "--sub-border-size=4",
             "--sub-color=#FFF6EC",
@@ -1552,6 +1590,13 @@ class PlaybackSession:
         else:
             self.command(["set_property", "sid", int(track_id)])
 
+    def set_subtitle_scale(self, scale: float) -> float:
+        """Set mpv's sub-scale at runtime. Returns the (clamped) value applied."""
+        clamped = _clamp_subtitle_scale(scale)
+        if self.backend == "mpv":
+            self.command(["set_property", "sub-scale", float(clamped)])
+        return clamped
+
     def current_audio_track(self) -> Optional[int]:
         if self.backend != "mpv":
             return None
@@ -1751,13 +1796,22 @@ class PlaybackSession:
     def show_start_menu_overlay(self, selected: int, items: list[str]) -> None:
         self._show_simple_menu_overlay("PLAYBACK MENU", selected, items)
 
-    def show_subtitle_menu_overlay(self, selected: int, items: list[str]) -> None:
-        self._show_simple_menu_overlay("SUBTITLE MENU", selected, items)
+    def show_subtitle_menu_overlay(
+        self, selected: int, items: list[str], *, extra_hint: Optional[str] = None
+    ) -> None:
+        self._show_simple_menu_overlay("SUBTITLE MENU", selected, items, extra_hint=extra_hint)
 
     def show_audio_menu_overlay(self, selected: int, items: list[str]) -> None:
         self._show_simple_menu_overlay("AUDIO MENU", selected, items)
 
-    def _show_simple_menu_overlay(self, title: str, selected: int, items: list[str]) -> None:
+    def _show_simple_menu_overlay(
+        self,
+        title: str,
+        selected: int,
+        items: list[str],
+        *,
+        extra_hint: Optional[str] = None,
+    ) -> None:
         if self.backend != "mpv":
             return
         rows = [title, ""]
@@ -1775,7 +1829,11 @@ class PlaybackSession:
             rows.append(f"{prefix} {text}")
         if start + visible_count < len(items):
             rows.append("  ...")
-        rows.extend(["", "UP/DOWN  A OK", "START/SELECT/B CLOSE"])
+        rows.append("")
+        rows.append("UP/DOWN  A OK")
+        if extra_hint:
+            rows.append(extra_hint)
+        rows.append("START/SELECT/B CLOSE")
         self.show_text("\n".join(rows), duration_ms=600000)
 
     def show_seek_overlay(self, paused: bool, step_seconds: int = 30) -> None:

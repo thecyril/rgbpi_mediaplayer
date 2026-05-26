@@ -43,7 +43,13 @@ from dvdplayer_python.media.youtube_receiver import (
     YouTubeReceiverManager,
     resolve_youtube_stream,
 )
-from dvdplayer_python.playback.session import PlaybackSession
+from dvdplayer_python.playback.session import (
+    PlaybackSession,
+    SUBTITLE_SCALE_DEFAULT,
+    SUBTITLE_SCALE_MAX,
+    SUBTITLE_SCALE_MIN,
+    SUBTITLE_SCALE_STEP,
+)
 from dvdplayer_python.ui.renderer import RenderModel, Renderer
 
 APP_WINDOW_TITLE = "DVD Mediaplayer"
@@ -71,6 +77,7 @@ OVERLAY_ACTION_INFORMATION = "information"
 OVERLAY_ACTION_RETURN_TO_BROWSER = "return_to_browser"
 OVERLAY_ACTION_SUBTITLE_OFF = "subtitle_off"
 OVERLAY_ACTION_SUBTITLE_TRACK_PREFIX = "subtitle_track:"
+OVERLAY_ACTION_SUBTITLE_SCALE = "subtitle_scale"
 
 START_MENU_ENTRIES_DVD = [
     (OVERLAY_ACTION_TOGGLE_PAUSE, "TOGGLE PAUSE"),
@@ -1374,10 +1381,15 @@ class App:
             self._close_overlay()
             return
         self.playback_overlay = "subtitle_menu"
-        self.playback_overlay_items = ["OFF"] + [str(track.get("label", "TRACK")) for track in valid_tracks]
+        # Track rows first, then a single non-track row to adjust the size.
+        # The size row's label embeds the current scale so the user can see
+        # the live value without opening a separate prefs page.
+        track_labels = [str(track.get("label", "TRACK")) for track in valid_tracks]
+        self.playback_overlay_items = ["OFF"] + track_labels + [self._subtitle_scale_label()]
         self.playback_overlay_actions = [OVERLAY_ACTION_SUBTITLE_OFF]
         for track in valid_tracks:
             self.playback_overlay_actions.append(f"{OVERLAY_ACTION_SUBTITLE_TRACK_PREFIX}{int(track.get('id', -1))}")
+        self.playback_overlay_actions.append(OVERLAY_ACTION_SUBTITLE_SCALE)
         current_sid = self.playback.current_subtitle_track()
         focus = 0
         if isinstance(current_sid, int):
@@ -1386,12 +1398,67 @@ class App:
                     focus = index
                     break
         self.playback_overlay_focus = focus
-        self.playback.show_subtitle_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+        self._render_subtitle_menu()
         log_event(
             "overlay_open",
             overlay=self.playback_overlay,
             focus=self.playback_overlay_focus,
             items=len(self.playback_overlay_items),
+        )
+
+    def _subtitle_scale_label(self) -> str:
+        scale = float(getattr(self.playback_state.prefs, "subtitle_scale", SUBTITLE_SCALE_DEFAULT))
+        return f"SUB SIZE: {scale:.1f}×"
+
+    def _adjust_subtitle_scale(self, direction: int) -> None:
+        """direction = +1 for LEFT-RIGHT bigger, -1 for smaller."""
+        current = float(getattr(self.playback_state.prefs, "subtitle_scale", SUBTITLE_SCALE_DEFAULT))
+        # Round to one decimal to avoid floating accumulation across many
+        # steps (0.1 + 0.1 + 0.1 ... drifts in float).
+        new_value = round(current + (SUBTITLE_SCALE_STEP * direction), 1)
+        self._set_subtitle_scale(new_value)
+
+    def _set_subtitle_scale(self, value: float) -> None:
+        """Apply a new subtitle scale: clamp, push to mpv, persist, refresh menu."""
+        if not self.playback:
+            return
+        try:
+            applied = self.playback.set_subtitle_scale(value)
+        except Exception as exc:
+            log_event("subtitle_scale_failed", value=value, error=str(exc))
+            return
+        # Only persist if mpv accepted the change — avoids saving a value
+        # that won't actually be in effect on next launch.
+        self.playback_state.prefs.subtitle_scale = float(applied)
+        try:
+            self.playback_state.write_prefs()
+        except Exception as exc:
+            log_event("subtitle_scale_persist_failed", value=applied, error=str(exc))
+        log_event("subtitle_scale", value=applied)
+        if self.playback_overlay == "subtitle_menu":
+            self._render_subtitle_menu()
+
+    def _render_subtitle_menu(self) -> None:
+        """Re-show the subtitle menu with the current focus + size label.
+
+        Centralised so every place that mutates the menu state (LEFT/RIGHT
+        scale adjust, UP/DOWN focus change, ACCEPT-reset on size row) goes
+        through the same render path and keeps the layout consistent.
+        """
+        if not self.playback:
+            return
+        # The size entry's label embeds the live value, so refresh it
+        # whenever we redraw — cheap and avoids a desync between display
+        # and pref.
+        if self.playback_overlay_items and self.playback_overlay_actions:
+            for idx, action_id in enumerate(self.playback_overlay_actions):
+                if action_id == OVERLAY_ACTION_SUBTITLE_SCALE and idx < len(self.playback_overlay_items):
+                    self.playback_overlay_items[idx] = self._subtitle_scale_label()
+                    break
+        self.playback.show_subtitle_menu_overlay(
+            self.playback_overlay_focus,
+            self.playback_overlay_items,
+            extra_hint="LEFT/RIGHT  SUB SIZE",
         )
 
     def _read_playback_property(self, name: str):
@@ -1645,17 +1712,31 @@ class App:
         elif self.playback_overlay == "subtitle_menu":
             if action == Action.UP and self.playback_overlay_items:
                 self.playback_overlay_focus = (self.playback_overlay_focus - 1) % len(self.playback_overlay_items)
-                self.playback.show_subtitle_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                self._render_subtitle_menu()
                 log_event("overlay_focus", overlay="subtitle_menu", focus=self.playback_overlay_focus)
                 return
             if action == Action.DOWN and self.playback_overlay_items:
                 self.playback_overlay_focus = (self.playback_overlay_focus + 1) % len(self.playback_overlay_items)
-                self.playback.show_subtitle_menu_overlay(self.playback_overlay_focus, self.playback_overlay_items)
+                self._render_subtitle_menu()
                 log_event("overlay_focus", overlay="subtitle_menu", focus=self.playback_overlay_focus)
+                return
+            if action in (Action.LEFT, Action.RIGHT):
+                # LEFT/RIGHT only does something when focus is on the size
+                # row. On any other row we just swallow the input so the
+                # menu doesn't accidentally close or behave weirdly.
+                action_id = self.playback_overlay_actions[self.playback_overlay_focus] if self.playback_overlay_actions else ""
+                if action_id == OVERLAY_ACTION_SUBTITLE_SCALE:
+                    self._adjust_subtitle_scale(+1 if action == Action.RIGHT else -1)
                 return
             if action == Action.ACCEPT:
                 action_id = self.playback_overlay_actions[self.playback_overlay_focus] if self.playback_overlay_actions else ""
                 source_kind = self.playback_source.kind.value if self.playback_source else "unknown"
+                # ACCEPT on the size row resets to 1.0× without closing the
+                # menu — quick way to undo a clumsy LEFT/RIGHT sequence.
+                if action_id == OVERLAY_ACTION_SUBTITLE_SCALE:
+                    self._set_subtitle_scale(SUBTITLE_SCALE_DEFAULT)
+                    log_event("overlay_action_ok", action_id=action_id, source_kind=source_kind, result="reset")
+                    return
                 try:
                     if action_id == OVERLAY_ACTION_SUBTITLE_OFF:
                         self.playback.set_subtitle_track(-1)
