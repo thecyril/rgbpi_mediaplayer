@@ -992,6 +992,7 @@ class PlaybackSession:
         backend_profile: str = "legacy",
         effective_mode: Optional[str] = None,
         degraded: bool = False,
+        audio_mode: str = "jack",
     ):
         self.child = child
         self.ipc_path = ipc_path
@@ -1002,6 +1003,9 @@ class PlaybackSession:
         self.backend_profile = backend_profile
         self.effective_mode = effective_mode
         self.degraded = degraded
+        # Audio output strategy chosen at launch: "jack" / "passthrough" /
+        # "dolby51" / "pcm_stereo". Surfaced in the INFORMATION overlay.
+        self.audio_mode = audio_mode
         self._overlay_paths: list[Path] = []
         self._started_at = time.time()
         self._request_id = 0
@@ -1045,7 +1049,7 @@ class PlaybackSession:
         ipc_path.unlink(missing_ok=True)
 
         if prefer_drm:
-            child, tty_handle = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=True)
+            child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=True)
             try:
                 cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
                 cls._verify_playback_session(child, ipc_path, require_video=source.authored_dvd)
@@ -1068,6 +1072,7 @@ class PlaybackSession:
                     backend_profile="drm",
                     effective_mode=effective_mode,
                     degraded=degraded,
+                    audio_mode=audio_mode,
                 )
             except Exception as exc:
                 log_event("mpv_drm_launch_failed", error=str(exc), mode=target_mode)
@@ -1081,7 +1086,7 @@ class PlaybackSession:
                     except Exception:
                         pass
 
-        child, tty_handle = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
+        child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
         try:
             cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
             cls._verify_playback_session(child, ipc_path, require_video=source.authored_dvd)
@@ -1101,6 +1106,7 @@ class PlaybackSession:
                 backend_profile="legacy",
                 effective_mode=effective_mode,
                 degraded=True if target_mode else degraded,
+                audio_mode=audio_mode,
             )
         except Exception:
             try:
@@ -1404,7 +1410,7 @@ class PlaybackSession:
             cwd=str(app_dir),
             env=_child_env(app_dir),
         )
-        return child, tty_handle
+        return child, tty_handle, audio_mode
 
     @staticmethod
     def _wait_for_ipc(child: subprocess.Popen, ipc_path: Path, timeout_s: float) -> None:

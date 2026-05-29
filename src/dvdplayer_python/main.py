@@ -1508,6 +1508,23 @@ class App:
             return f"MPV {tscale}"
         return "OFF"
 
+    def _audio_output_status(self, audio_codec: str) -> str:
+        """What's actually sent to the audio output (vs the source AUDIO CODEC).
+
+        Reads the strategy chosen at launch (PlaybackSession.audio_mode); for
+        native passthrough the displayed format follows the source codec.
+        """
+        mode = str(getattr(self.playback, "audio_mode", "jack")) if self.playback else "jack"
+        if mode == "dolby51":
+            return "DOLBY DIGITAL 5.1 (OPTICAL)"
+        if mode == "pcm_stereo":
+            return "PCM STEREO (OPTICAL)"
+        if mode == "passthrough":
+            codec = str(audio_codec or "").upper()
+            fmt = "DTS" if "DTS" in codec else "DOLBY DIGITAL"
+            return f"{fmt} PASSTHROUGH (OPTICAL)"
+        return "JACK 3.5MM (STEREO)"
+
     def _open_information_overlay(self):
         if not self.playback:
             return
@@ -1556,11 +1573,13 @@ class App:
             video_fps = f"{video_fps:s} (×{speed_value:.4f} → {video_fps_value * speed_value:.3f})"
         tv_hz = self._current_tv_hz_label()
         interpolation_type = self._current_interpolation_type()
+        audio_out = self._audio_output_status(audio_codec)
         rows = [
             "INFORMATION",
             "",
             f"VIDEO CODEC: {video_codec}",
             f"AUDIO CODEC: {audio_codec}",
+            f"AUDIO OUT: {audio_out}",
             f"VIDEO RESOLUTION: {video_resolution}",
             f"TV RESOLUTION: {tv_resolution}",
             f"VIDEO FPS: {video_fps}",
@@ -2553,8 +2572,17 @@ class App:
             except Exception as exc:
                 log_event("playback_resume_failed", error=str(exc))
 
+        # Volume. In optical 5.1 mode the audio is AC3-encoded (dolby51) or
+        # bitstream-passed-through to the Q990D, so the player must output at
+        # full scale (100%) — attenuating before the AC3 encode would lose
+        # dynamic range, and passthrough ignores the player volume entirely.
+        # The user adjusts volume on the soundbar instead. In jack mode the
+        # player volume works normally.
         try:
-            self.playback.set_volume(self.playback_state.prefs.volume)
+            if str(getattr(self.playback_state.prefs, "audio_output", "jack")).lower() in {"optical_5_1", "optical"}:
+                self.playback.set_volume(100.0)
+            else:
+                self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
             pass
         # Brief HUD pop on session start so the user sees title + duration.
