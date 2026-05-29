@@ -190,7 +190,15 @@ def _resolve_alsa_device() -> str:
 # DTS-HD do not (HDMI-only), so they fall back to the dolby51 transcode path.
 # ---------------------------------------------------------------------------
 _OPTICAL_PASSTHROUGH_CODECS = {"ac3", "dts"}
+# Raw hw device — for PCM (stereo) and as the dolby51 a52 slave.
 _UT23_HW = os.environ.get("DVDPLAYER_OPTICAL_HW", "").strip() or "hw:CARD=Tx,DEV=0"
+# IEC958 device — REQUIRED for native AC3/DTS passthrough: mpv appends AES
+# channel-status params (AES0=6 = non-audio, …) to the device name when
+# bitstreaming. The plain `hw:` device rejects those ("Unknown parameter
+# AES0") and mpv then silently falls back to PCM decode. The `iec958:`
+# plugin accepts the AES params and routes to the same hardware. (This is
+# the device Kodi uses for its passthrough output too.)
+_UT23_IEC958 = os.environ.get("DVDPLAYER_OPTICAL_IEC958", "").strip() or "iec958:CARD=Tx,DEV=0"
 _DOLBY51 = os.environ.get("DVDPLAYER_DOLBY_DEVICE", "").strip() or "dolby51"
 
 
@@ -283,7 +291,9 @@ def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = 
     if has_non_bitstream_mc:
         return "dolby51", ["--ao=alsa", f"--audio-device=alsa/{_DOLBY51}", "--audio-channels=5.1"]
     if multichannel:
-        return "passthrough", ["--ao=alsa", f"--audio-device=alsa/{_UT23_HW}", "--audio-spdif=ac3,dts"]
+        # iec958 device (not hw) — see _UT23_IEC958: mpv appends AES params
+        # for passthrough which only the iec958 plugin accepts.
+        return "passthrough", ["--ao=alsa", f"--audio-device=alsa/{_UT23_IEC958}", "--audio-spdif=ac3,dts"]
     return "pcm_stereo", [
         "--audio-channels=stereo",
         "--ao=alsa",
