@@ -135,6 +135,47 @@ The fork currently keeps these local defaults different from upstream:
 | Film-rate handling (23.976 / 24 fps source) | `720x576i` (PAL 50Hz) at native speed → ratio 2.085 → **irregular** 2:2:2:2:2:2:2:2:2:2:2:2:3 cadence (hiccup every ~12 frames, very visible judder) | **PAL speedup** by default: `720x576i` (PAL 50Hz) **+ `--speed=25/src_fps` + `--audio-pitch-correction=no`** → effective rate 25 fps, ratio `50/25 = 2.000` exact → **perfect 1:2 cadence, zero judder**. Audio is pitched +4 % (~0.7 semitones up) as a side effect — the same shift every European broadcast of a Hollywood film used from 1960 to ~2010. Override: `DVDPLAYER_PAL_SPEEDUP=0` falls back to NTSC 60Hz routing (`720x480i`, ratio `60/23.976 = 2.503` → regular 2:3 pulldown, audio at correct pitch). |
 | NTSC-rate handling (29.97 / 59.94 fps source) | `720x480i` (NTSC 60Hz) at native speed → ratio 2.002 → mpv's audio sync drops/duplicates a frame every ~50 s to keep up with the 0.067 % drift → an intermittent **micro-hiccup** | **NTSC speedup** by default: `720x480i` + `--speed=30/src_fps` (= 1.001) + `--audio-pitch-correction=no` → effective rate 30 fps, ratio `60/30 = 2.000` exact → **perfect cadence**. Audio is pitched +0.017 semitones (well below human detection threshold of ≈ 0.05 semitones — genuinely inaudible). Symmetric to PAL speedup. Override: `DVDPLAYER_NTSC_SPEEDUP=0` or in-app SETTINGS → "30P SMOOTHING" OFF. |
 
+### Optical 5.1 audio output (UT23 → Samsung HW-Q990D)
+
+The player can output **true 5.1** (Dolby Digital / DTS) over the Hifime
+UT23 USB→optical adapter to a Samsung HW-Q990D soundbar. SETTINGS →
+**AUDIO OUTPUT** toggles `JACK 3.5MM` (default) vs `OPTICAL 5.1`.
+
+In optical mode the player probes the source's audio streams at launch
+and picks — per file — the strategy that stays valid across mid-playback
+track switches (no relaunch):
+
+| Source track(s) | mpv device + flags | Soundbar shows |
+|---|---|---|
+| AC3 / DTS-core multichannel (all bitstream) | `iec958:CARD=Tx` + `--audio-spdif=ac3,dts` | **DTS** / **Dolby Digital** (native) |
+| FLAC / AAC / E-AC3 / PCM 5.1 (any non-bitstream MC) | `dolby51` (ALSA `a52`, software AC3) | **Dolby Digital** |
+| stereo only | `hw:CARD=Tx` (PCM) | (stereo) |
+| probe failure | `dolby51` (safe) | **Dolby Digital** |
+
+The non-obvious bits (full story in the guide, linked below):
+
+- The UT23 exposes **no IEC958 mixer control**, so passthrough can't set
+  the non-audio channel-status bit the usual way — but the Q990D detects
+  AC3/DTS via the **IEC61937 burst preambles** in the data, so raw
+  bit-perfect output works regardless.
+- Passthrough **must** use the `iec958:` device, **not** `hw:` — mpv
+  appends AES params (`AES0=6`) that only the `iec958` plugin accepts;
+  `hw:` rejects them ("Unknown parameter AES0") and mpv silently falls
+  back to PCM decode (→ soundbar shows "PCM", stereo).
+- The UT23 hardware PCM volume **must stay at 0 dB** or the bitstream
+  corrupts into noise. Player volume is software (right stick); in
+  passthrough it's bit-perfect-ignored (use the soundbar remote).
+- Only AC3 + DTS **core** survive an optical link; E-AC3 / TrueHD /
+  DTS-HD extensions are HDMI-only, hence they take the `dolby51`
+  transcode path (DTS-HD MA still plays — its DTS core is passed/encoded).
+
+**Right-stick volume**: the right analog stick up/down adjusts the player
+volume (held-to-repeat, OSD, persisted) — same as Kodi.
+
+Full hardware setup (a52 plugin install, `/etc/asound.conf` `dolby51`
+device, 0 dB volume, Kodi config): see
+[`rgbpi-5.1-dolby-digital-audio-guide.md`](Volumes/Disk1/Games/RGBPI/rgbpi-5.1-dolby-digital-audio-guide.md).
+
 ### Reverted: motion defaults flip (commit 833a892 / merge c20029e + gating 0d7e2cd)
 
 We previously flipped `PlaybackPrefs.deinterlace_mode` to `bob` and the global
@@ -194,6 +235,17 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
   `--sub-scale`; note that mpv applies it to plain-text subs
   (SRT, VOBSUB) but **not** to ASS subs by default — stylised
   ASS subtitles will keep their authored size.
+- **AUDIO OUTPUT** (in-app SETTINGS menu) — `JACK 3.5MM` (default) vs
+  `OPTICAL 5.1`. Stored as `"audio_output"` in `playback_prefs.json`.
+  Env override `DVDPLAYER_AUDIO_OUTPUT=jack|optical`. Related optical
+  knobs (rarely needed): `DVDPLAYER_OPTICAL_HW` (default
+  `hw:CARD=Tx,DEV=0` — PCM/stereo + dolby51 slave),
+  `DVDPLAYER_OPTICAL_IEC958` (default `iec958:CARD=Tx,DEV=0` —
+  native passthrough), `DVDPLAYER_DOLBY_DEVICE` (default `dolby51`).
+- `DVDPLAYER_VOLUME_AXIS=<n>` (env var) — joystick axis for the
+  right-stick volume control. Default `4` (Xbox360/xpad right-stick Y).
+  Move the right stick and check `js_axis` log events if a different
+  controller maps it elsewhere.
 
 ---
 
@@ -207,7 +259,11 @@ Some setup steps had to be done in-place on the Pi (no Python code involved). Th
   "server_uri": "http://192.168.1.3:32400"
   ```
   pointing at the current LAN IP of the active Plex server (machine identifier `cfd904f5…` for this setup).
-- `/etc/asound.conf` — kept on the bypass-EQ config (`pcm.!default → plug → sysdefault:0`). The original equaliser config (`/etc/asound.conf.backup-pre-godot-fix`) caused xruns on the kernel-6.1 ALSA stack during a brief sinistre and was reverted; restoring it once the LCD/USB 5.1 setup is wired in will need a new asound.conf anyway.
+- `/etc/asound.conf` — bypass-EQ base config (`pcm.!default → plug → sysdefault:0`) **plus** the `dolby51` device used for optical 5.1 (a52 software AC3 → UT23). Backup of the pre-5.1 state: `/etc/asound.conf.backup-pre-a52`. The earlier equaliser config (`/etc/asound.conf.backup-pre-godot-fix`) caused xruns on the kernel-6.1 ALSA stack and was reverted.
+- **Optical 5.1 audio setup** (mandatory for the OPTICAL 5.1 output mode; full walkthrough in `rgbpi-5.1-dolby-digital-audio-guide.md`):
+  - `apt-get install -y --no-install-recommends libasound2-plugins:arm64` — the `a52` ALSA plugin shipped only as armhf (32-bit) on this image, unusable by the arm64 mpv/Kodi. **Targeted install only — never `apt upgrade`** (that broke the kernel once).
+  - `dolby51` block appended to `/etc/asound.conf` (plug → a52 → `hw:CARD=Tx`).
+  - UT23 PCM volume pinned to **0 dB** and persisted: `amixer -c Tx sset PCM 100% unmute && alsactl store`. Below 0 dB the AC3/DTS bitstream corrupts into noise.
 
 ---
 
@@ -244,4 +300,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 25 mai 2026 (reverted motion defaults to upstream after A/B comparison)._
+_Last updated: 29 mai 2026 (optical 5.1 audio output + right-stick volume; SUB SIZE; HUD aspect fix)._
