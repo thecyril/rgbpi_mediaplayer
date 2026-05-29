@@ -3115,6 +3115,12 @@ class App:
     def _ntsc_speedup_subtitle(self) -> str:
         return "ON (inaudible)" if bool(getattr(self.playback_state.prefs, "ntsc_speedup", True)) else "OFF"
 
+    def _audio_output_label(self, value: str) -> str:
+        return "OPTICAL 5.1 (Q990D)" if str(value).lower() in {"optical_5_1", "optical"} else "JACK 3.5MM"
+
+    def _audio_output_subtitle(self) -> str:
+        return self._audio_output_label(getattr(self.playback_state.prefs, "audio_output", "jack"))
+
     def _deinterlace_label(self, value: str) -> str:
         return "BOB" if str(value).lower() == "bob" else "WEAVE"
 
@@ -3136,6 +3142,7 @@ class App:
             "settings_force_43",
             "settings_pal_speedup",
             "settings_ntsc_speedup",
+            "settings_audio_output",
         }
 
     def _is_switchable_setting_item(self, item: ListItem) -> bool:
@@ -3236,6 +3243,17 @@ class App:
             self.message = MessageBox("SETTINGS", f"30P SMOOTHING {label}")
             log_event("settings_ntsc_speedup", enabled=next_value, via=action.value)
             return True
+        if item.kind == "settings_audio_output":
+            # RIGHT = optical 5.1, LEFT = jack. Two-value toggle.
+            next_value = "optical_5_1" if action == Action.RIGHT else "jack"
+            self.playback_state.prefs.audio_output = next_value
+            self.playback_state.write_prefs()
+            self._refresh_settings_items()
+            label = self._audio_output_label(next_value)
+            self.status_line = f"Audio output {label}"
+            self.message = MessageBox("SETTINGS", f"AUDIO OUTPUT {label}")
+            log_event("settings_audio_output", value=next_value, via=action.value)
+            return True
         return False
 
     def _settings_items(self) -> list[ListItem]:
@@ -3269,6 +3287,11 @@ class App:
                 title="VOLUME NORMALIZATION",
                 subtitle=self._volume_normalization_subtitle(),
                 kind="settings_volume_normalization",
+            ),
+            ListItem(
+                title="AUDIO OUTPUT",
+                subtitle=self._audio_output_subtitle(),
+                kind="settings_audio_output",
             ),
             ListItem(
                 title="FORCE 4:3",
