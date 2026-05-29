@@ -231,6 +231,7 @@ class App:
         self._js_axis_state: dict[int, tuple[bool, bool]] = {}
         self._js_pending_combo_button: Optional[int] = None
         self._js_pending_combo_at = 0.0
+        self._last_volume_repeat = 0.0
 
         self.local_roots = [Path(p) for p in ROOT_BROWSE_PATHS if Path(p).is_dir()]
         self._start_joystick_listener()
@@ -599,6 +600,12 @@ class App:
             if now - self.last_bookmark_save >= BOOKMARK_SAVE_INTERVAL:
                 self.persist_bookmark(force=False)
                 self.last_bookmark_save = now
+            # Right-stick held-to-repeat volume: the edge press fires the
+            # first step via dispatch; while the stick stays past the
+            # threshold, repeat ~10×/s so holding ramps the volume.
+            neg, pos = self._js_axis_state.get(_VOLUME_AXIS, (False, False))
+            if (neg or pos) and now - self._last_volume_repeat >= 0.10:
+                self._adjust_playback_volume(+1 if neg else -1)
             # Drive the HUD's auto-hide timer. Skip while any START/AUDIO/
             # SUBTITLE/INFORMATION overlay is up — those overlays own the
             # screen themselves and would just race the HUD.
@@ -643,6 +650,46 @@ class App:
         except Exception as exc:
             log_event("playback_hud_action_failed", error=str(exc), action="hide")
 
+    def _adjust_playback_volume(self, direction: int) -> None:
+        """Bump the player volume by one step (right-stick / repeat).
+
+        direction: +1 louder, -1 quieter. Step is 5%. In native passthrough
+        the player volume is bit-perfect-ignored, so we just tell the user to
+        use the soundbar remote. Persisted to prefs so it survives restarts.
+        """
+        self._last_volume_repeat = time.time()
+        if not self.playback:
+            return
+        if getattr(self.playback, "audio_mode", "") == "passthrough":
+            if self.playback_overlay is None:
+                try:
+                    self.playback.show_text("VOLUME → SOUNDBAR REMOTE", duration_ms=1400)
+                except Exception:
+                    pass
+            return
+        step = 5
+        current = float(getattr(self.playback_state.prefs, "volume", 72.0) or 0.0)
+        new_value = max(0.0, min(100.0, round(current + step * direction)))
+        if new_value == current:
+            return
+        try:
+            self.playback.set_volume(new_value)
+        except Exception as exc:
+            log_event("playback_volume_failed", error=str(exc))
+            return
+        self.playback_state.prefs.volume = new_value
+        try:
+            self.playback_state.write_prefs()
+        except Exception as exc:
+            log_event("playback_volume_persist_failed", error=str(exc))
+        # OSD only when no menu overlay owns the screen (don't clobber it).
+        if self.playback_overlay is None:
+            try:
+                self.playback.show_text(f"VOLUME  {int(new_value)}%", duration_ms=1200)
+            except Exception:
+                pass
+        log_event("playback_volume", value=new_value, via="stick")
+
     def dispatch(self, action: Action, source: str):
         self.last_input = time.time()
         log_event(
@@ -670,6 +717,12 @@ class App:
             return
         if action == Action.HOME:
             self.go_home()
+            return
+
+        # Right-stick volume — handled globally (only meaningful during
+        # playback), never routed to the per-screen handlers.
+        if action in (Action.VOLUME_UP, Action.VOLUME_DOWN):
+            self._adjust_playback_volume(+1 if action == Action.VOLUME_UP else -1)
             return
 
         if self.playback:
@@ -2572,17 +2625,13 @@ class App:
             except Exception as exc:
                 log_event("playback_resume_failed", error=str(exc))
 
-        # Volume. In optical 5.1 mode the audio is AC3-encoded (dolby51) or
-        # bitstream-passed-through to the Q990D, so the player must output at
-        # full scale (100%) — attenuating before the AC3 encode would lose
-        # dynamic range, and passthrough ignores the player volume entirely.
-        # The user adjusts volume on the soundbar instead. In jack mode the
-        # player volume works normally.
+        # Volume — the persisted player volume, adjustable live with the
+        # right analog stick (see _adjust_playback_volume). Note: in optical
+        # dolby51 mode keep it near 100% for best AC3 quality (attenuating
+        # before the encode loses dynamic range); in native passthrough the
+        # player volume is ignored (bit-perfect) so use the Q990D remote.
         try:
-            if str(getattr(self.playback_state.prefs, "audio_output", "jack")).lower() in {"optical_5_1", "optical"}:
-                self.playback.set_volume(100.0)
-            else:
-                self.playback.set_volume(self.playback_state.prefs.volume)
+            self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
             pass
         # Brief HUD pop on session start so the user sees title + duration.
@@ -3430,10 +3479,16 @@ def _map_joystick_axis(number: int) -> Optional[tuple[Action, Action]]:
     mapping = {
         0: (Action.LEFT, Action.RIGHT),  # left stick X
         1: (Action.UP, Action.DOWN),  # left stick Y
+        4: (Action.VOLUME_UP, Action.VOLUME_DOWN),  # right stick Y → volume
         6: (Action.LEFT, Action.RIGHT),  # dpad X (xbox/xpad)
         7: (Action.UP, Action.DOWN),  # dpad Y (xbox/xpad)
     }
     return mapping.get(int(number))
+
+
+# Right-stick Y axis number (held-to-repeat volume). Override with
+# DVDPLAYER_VOLUME_AXIS if the controller maps the right stick elsewhere.
+_VOLUME_AXIS = int(os.environ.get("DVDPLAYER_VOLUME_AXIS", "4") or "4")
 
 
 def _now_ms() -> int:

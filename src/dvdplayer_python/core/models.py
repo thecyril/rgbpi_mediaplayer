@@ -41,6 +41,8 @@ class Action(str, Enum):
     X = "x"
     HOME = "home"
     QUIT = "quit"
+    VOLUME_UP = "volume_up"
+    VOLUME_DOWN = "volume_down"
 
 
 class PlaybackKind(str, Enum):
