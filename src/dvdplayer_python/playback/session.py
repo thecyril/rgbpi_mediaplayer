@@ -32,6 +32,12 @@ BOB_DEINTERLACE_FILTER = f"bwdif=mode={_BWDIF_MODE}:parity=auto:deint=interlaced
 SMOOTH_FPS_FILTER = "fps=60000/1001"
 CABLE_SMOOTH_BLEND_FILTER = "lavfi=[tblend=all_mode=average]"
 _FFMPEG_FILTER_SUPPORT_CACHE: dict[str, bool] = {}
+# Per-URI detected video fps. Filled by the ffprobe in _probe_video_info /
+# _probe_video_fps (run during output-mode routing) so the PAL/NTSC speedup
+# in _spawn_mpv can reuse the same value without a second probe — and, crucially,
+# so the speedup fires for Plex sources where source.hint_fps is None (the
+# routing probes the fps but hint_fps stays empty → speedup was silently skipped).
+_VIDEO_FPS_CACHE: dict[str, float] = {}
 
 
 def _which(binary: str) -> Optional[str]:
@@ -616,6 +622,8 @@ def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
             field_order = stream.get("field_order")
             if width <= 0 or height <= 0:
                 continue
+            if fps:
+                _VIDEO_FPS_CACHE[str(uri)] = float(fps)
             return VideoProbeInfo(width=width, height=height, fps=fps, field_order=str(field_order) if field_order else None)
         except Exception:
             continue
@@ -657,10 +665,28 @@ def _probe_video_fps(uri: str) -> Optional[float]:
             stream = streams[0]
             fps = _parse_frame_rate(stream.get("avg_frame_rate")) or _parse_frame_rate(stream.get("r_frame_rate"))
             if fps is not None:
+                _VIDEO_FPS_CACHE[str(uri)] = float(fps)
                 return fps
         except Exception:
             continue
     return None
+
+
+def _cached_source_fps(source: PlaybackSource) -> Optional[float]:
+    """Best-known video fps for a source: hint → routing-probe cache → probe.
+
+    Used by the PAL/NTSC speedup so it sees the SAME fps the output-mode
+    routing did. Crucial for Plex sources where ``source.hint_fps`` is None
+    but the routing already probed (and cached) the real rate — without this
+    the speedup was silently skipped and 24p landed on a 50 Hz PAL output
+    with no speed correction (the irregular 2.085 cadence judder).
+    """
+    if source.hint_fps:
+        return float(source.hint_fps)
+    uri = str(source.uri or "")
+    if uri in _VIDEO_FPS_CACHE:
+        return _VIDEO_FPS_CACHE[uri]
+    return _probe_video_fps(uri)
 
 
 def _mode_from_fps_only(fps: Optional[float]) -> Optional[str]:
@@ -1328,8 +1354,13 @@ class PlaybackSession:
         # output is *confirmed* to be a CRT 50/60 Hz mode. On the LCD
         # pipeline the native output rate is unpredictable and the
         # speedup would likely worsen cadence rather than improve it.
+        # Use the routing-probed fps (cached), not just source.hint_fps —
+        # otherwise Plex sources (hint_fps=None) get the PAL/NTSC *routing*
+        # but never the matching --speed, landing 24p on 50 Hz with the
+        # judder we set out to remove.
+        effective_fps = _cached_source_fps(source)
         if prefer_drm and drm_target:
-            speedup = _speedup_for_source(source.hint_fps, target_mode, prefs=prefs)
+            speedup = _speedup_for_source(effective_fps, target_mode, prefs=prefs)
         else:
             speedup = None
         if speedup is not None:
@@ -1383,7 +1414,7 @@ class PlaybackSession:
             smooth_fps_filter=smooth_fps_filter,
             motion_vf_filter=motion_vf_filter,
             pal_speedup=speedup,
-            source_fps=source.hint_fps,
+            source_fps=effective_fps,
             audio_mode=audio_mode,
         )
         log_event(
