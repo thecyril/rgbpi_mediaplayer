@@ -174,6 +174,134 @@ def _resolve_alsa_device() -> str:
     return override or "hw:0,0"
 
 
+# ---------------------------------------------------------------------------
+# 5.1 audio over the UT23 optical link (Dolby Digital / DTS to the Q990D).
+#
+# See Volumes/Disk1/Games/RGBPI/rgbpi-5.1-dolby-digital-audio-guide.md for the
+# full hardware story. In short:
+#   - `_UT23_HW`     : the UT23 raw hw device. Carries native AC3/DTS bitstream
+#                      bit-perfect (Q990D detects it via the IEC61937 preambles)
+#                      AND stereo PCM. Its hardware PCM volume MUST stay at 0 dB.
+#   - `_DOLBY51`     : the ALSA `a52` device (defined in /etc/asound.conf) that
+#                      encodes any PCM 5.1 to AC3 on the fly ("Dolby Digital
+#                      Live") and feeds _UT23_HW. Used for FLAC/AAC/PCM
+#                      multichannel that can't be bitstreamed natively.
+# Only AC3 and DTS *core* survive an optical S/PDIF link; E-AC3, TrueHD and
+# DTS-HD do not (HDMI-only), so they fall back to the dolby51 transcode path.
+# ---------------------------------------------------------------------------
+_OPTICAL_PASSTHROUGH_CODECS = {"ac3", "dts"}
+# Raw hw device — for PCM (stereo) and as the dolby51 a52 slave.
+_UT23_HW = os.environ.get("DVDPLAYER_OPTICAL_HW", "").strip() or "hw:CARD=Tx,DEV=0"
+# IEC958 device — REQUIRED for native AC3/DTS passthrough: mpv appends AES
+# channel-status params (AES0=6 = non-audio, …) to the device name when
+# bitstreaming. The plain `hw:` device rejects those ("Unknown parameter
+# AES0") and mpv then silently falls back to PCM decode. The `iec958:`
+# plugin accepts the AES params and routes to the same hardware. (This is
+# the device Kodi uses for its passthrough output too.)
+_UT23_IEC958 = os.environ.get("DVDPLAYER_OPTICAL_IEC958", "").strip() or "iec958:CARD=Tx,DEV=0"
+_DOLBY51 = os.environ.get("DVDPLAYER_DOLBY_DEVICE", "").strip() or "dolby51"
+
+
+def _resolve_audio_output(prefs: Optional[PlaybackPrefs] = None) -> str:
+    """Resolve the audio output path: ``"jack"`` or ``"optical_5_1"``.
+
+    Order: ``DVDPLAYER_AUDIO_OUTPUT`` env var > ``prefs.audio_output`` > "jack".
+    """
+    env = os.environ.get("DVDPLAYER_AUDIO_OUTPUT", "").strip().lower()
+    if env in {"jack", "optical_5_1", "optical"}:
+        return "optical_5_1" if env in {"optical_5_1", "optical"} else "jack"
+    value = str(getattr(prefs, "audio_output", "jack") or "jack").strip().lower()
+    return "optical_5_1" if value in {"optical_5_1", "optical"} else "jack"
+
+
+def _probe_audio_streams(uri: str) -> list[dict[str, Any]]:
+    """Probe every audio stream of ``uri`` → list of ``{codec, channels}``.
+
+    Returns ``[]`` on probe failure (caller treats that as "unknown" and
+    falls back to the safe dolby51 path).
+    """
+    ffprobe = _which("ffprobe") or ("/usr/bin/ffprobe" if Path("/usr/bin/ffprobe").exists() else None)
+    if not ffprobe:
+        return []
+    args = [
+        ffprobe, "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=codec_name,channels",
+        "-of", "json",
+        uri,
+    ]
+    timeouts = [FFPROBE_TIMEOUT_SECS, max(FFPROBE_TIMEOUT_SECS * 2.0, 12.0)]
+    for timeout in timeouts:
+        try:
+            out = subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True, timeout=timeout)
+        except Exception:
+            continue
+        try:
+            payload = json.loads(out)
+        except Exception:
+            continue
+        streams = payload.get("streams") or []
+        result: list[dict[str, Any]] = []
+        for s in streams:
+            codec = str(s.get("codec_name") or "").strip().lower()
+            try:
+                channels = int(s.get("channels") or 0)
+            except (TypeError, ValueError):
+                channels = 0
+            if codec:
+                result.append({"codec": codec, "channels": channels})
+        return result
+    return []
+
+
+def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> tuple[str, list[str]]:
+    """Decide the audio strategy + the mpv args that implement it.
+
+    Returns ``(mode, args)`` where ``mode`` is one of
+    ``jack`` / ``passthrough`` / ``dolby51`` / ``pcm_stereo`` (for logging),
+    and ``args`` is the list of mpv flags to append.
+
+    Strategy in optical mode (designed to be robust against mid-playback
+    audio-track switches — the chosen device stays valid for every track):
+      * any multichannel track that ISN'T optical-bitstreamable (FLAC, AAC,
+        E-AC3, TrueHD, PCM 5.1…)  → ``dolby51`` (decode → AC3). Covers
+        everything; switching tracks just re-encodes.
+      * else if there's a multichannel track and they're ALL AC3/DTS core
+        → native passthrough on the UT23 (Q990D shows "DTS"/"Dolby Digital").
+        Switching between bitstream tracks stays valid; a stereo track just
+        decodes to PCM stereo which the optical link also carries.
+      * else (stereo only) → PCM stereo straight to the UT23.
+    Probe failure → dolby51 (safe: handles any channel count).
+    """
+    if _resolve_audio_output(prefs) == "jack":
+        return "jack", [
+            "--audio-channels=stereo",
+            "--ao=alsa",
+            f"--audio-device=alsa/{_resolve_alsa_device()}",
+            "--audio-samplerate=48000",
+        ]
+
+    streams = _probe_audio_streams(source.uri)
+    multichannel = [s for s in streams if s["channels"] > 2]
+    has_non_bitstream_mc = any(s["codec"] not in _OPTICAL_PASSTHROUGH_CODECS for s in multichannel)
+
+    if not streams:
+        # Unknown — dolby51 is the safe universal path.
+        return "dolby51", ["--ao=alsa", f"--audio-device=alsa/{_DOLBY51}", "--audio-channels=5.1"]
+    if has_non_bitstream_mc:
+        return "dolby51", ["--ao=alsa", f"--audio-device=alsa/{_DOLBY51}", "--audio-channels=5.1"]
+    if multichannel:
+        # iec958 device (not hw) — see _UT23_IEC958: mpv appends AES params
+        # for passthrough which only the iec958 plugin accepts.
+        return "passthrough", ["--ao=alsa", f"--audio-device=alsa/{_UT23_IEC958}", "--audio-spdif=ac3,dts"]
+    return "pcm_stereo", [
+        "--audio-channels=stereo",
+        "--ao=alsa",
+        f"--audio-device=alsa/{_UT23_HW}",
+        "--audio-samplerate=48000",
+    ]
+
+
 # Subtitle scale (user-adjustable in the SUBTITLE playback menu).
 # Range is bounded so the menu can't push the user into an unreadable
 # or screen-overflowing state. Sub-scale is a *multiplier* applied to
@@ -874,6 +1002,7 @@ class PlaybackSession:
         backend_profile: str = "legacy",
         effective_mode: Optional[str] = None,
         degraded: bool = False,
+        audio_mode: str = "jack",
     ):
         self.child = child
         self.ipc_path = ipc_path
@@ -884,6 +1013,9 @@ class PlaybackSession:
         self.backend_profile = backend_profile
         self.effective_mode = effective_mode
         self.degraded = degraded
+        # Audio output strategy chosen at launch: "jack" / "passthrough" /
+        # "dolby51" / "pcm_stereo". Surfaced in the INFORMATION overlay.
+        self.audio_mode = audio_mode
         self._overlay_paths: list[Path] = []
         self._started_at = time.time()
         self._request_id = 0
@@ -927,7 +1059,7 @@ class PlaybackSession:
         ipc_path.unlink(missing_ok=True)
 
         if prefer_drm:
-            child, tty_handle = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=True)
+            child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=True)
             try:
                 cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
                 cls._verify_playback_session(child, ipc_path, require_video=source.authored_dvd)
@@ -950,6 +1082,7 @@ class PlaybackSession:
                     backend_profile="drm",
                     effective_mode=effective_mode,
                     degraded=degraded,
+                    audio_mode=audio_mode,
                 )
             except Exception as exc:
                 log_event("mpv_drm_launch_failed", error=str(exc), mode=target_mode)
@@ -963,7 +1096,7 @@ class PlaybackSession:
                     except Exception:
                         pass
 
-        child, tty_handle = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
+        child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
         try:
             cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
             cls._verify_playback_session(child, ipc_path, require_video=source.authored_dvd)
@@ -983,6 +1116,7 @@ class PlaybackSession:
                 backend_profile="legacy",
                 effective_mode=effective_mode,
                 degraded=True if target_mode else degraded,
+                audio_mode=audio_mode,
             )
         except Exception:
             try:
@@ -1129,28 +1263,17 @@ class PlaybackSession:
         #   sub margin = 6%   × 720 = 43
         #   sub border = 720  / 180 = 4 (kept at 4 — border-size is a
         #                                visual constant, not font-relative)
+        # Audio output: either the bcm2835 jack (stereo, direct hw:0,0 to skip
+        # ALSA's poor plug resampler) or the UT23 optical 5.1 path with
+        # automatic codec detection (native AC3/DTS passthrough, or AC3
+        # transcode via the dolby51 a52 device). See _audio_output_plan.
+        audio_mode, audio_args = _audio_output_plan(source, prefs)
         args = [
             mpv,
             "--fs",
             "--no-osc",
             "--input-default-bindings=no",
-            "--audio-channels=stereo",
-            # Drive ALSA directly: skip the system pcm.!default → plug →
-            # sysdefault:0 chain so we don't get ALSA's poor
-            # linear-interpolation resampler in the path. mpv's own
-            # resampler (libswresample) is much higher quality.
-            #
-            # We pin the output sample rate to 48 kHz — the bcm2835
-            # driver's native rate, and the rate AC3 / AAC / FLAC sources
-            # are almost always encoded at — so on the common case
-            # libswresample is a passthrough and the audio reaches the
-            # PWM stage unmolested. mpv's ao_alsa.c negotiates the sample
-            # *format* automatically (snd_pcm_hw_params_test_format), so
-            # no need to pin --audio-format: bcm2835 only exposes S16_LE
-            # and mpv lands there on its own.
-            "--ao=alsa",
-            f"--audio-device=alsa/{_resolve_alsa_device()}",
-            "--audio-samplerate=48000",
+            *audio_args,
             "--osd-level=0",
             "--osd-align-x=center",
             "--osd-align-y=center",
@@ -1261,6 +1384,7 @@ class PlaybackSession:
             motion_vf_filter=motion_vf_filter,
             pal_speedup=speedup,
             source_fps=source.hint_fps,
+            audio_mode=audio_mode,
         )
         log_event(
             "mpv_spawn",
@@ -1296,7 +1420,7 @@ class PlaybackSession:
             cwd=str(app_dir),
             env=_child_env(app_dir),
         )
-        return child, tty_handle
+        return child, tty_handle, audio_mode
 
     @staticmethod
     def _wait_for_ipc(child: subprocess.Popen, ipc_path: Path, timeout_s: float) -> None:

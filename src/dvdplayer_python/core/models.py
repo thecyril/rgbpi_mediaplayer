@@ -41,6 +41,8 @@ class Action(str, Enum):
     X = "x"
     HOME = "home"
     QUIT = "quit"
+    VOLUME_UP = "volume_up"
+    VOLUME_DOWN = "volume_down"
 
 
 class PlaybackKind(str, Enum):
@@ -164,6 +166,12 @@ class PlaybackPrefs:
     pal_speedup: bool = True
     ntsc_speedup: bool = True
     subtitle_scale: float = 1.0
+    # Audio output path:
+    #   "jack"        → bcm2835 3.5mm analog (stereo, the upstream default)
+    #   "optical_5_1" → UT23 USB→optical → Q990D, with automatic 5.1
+    #                   (native AC3/DTS passthrough, or AC3 transcode via
+    #                   the `dolby51` ALSA device for FLAC/PCM multichannel)
+    audio_output: str = "jack"
 
 
 def app_dir() -> Path:

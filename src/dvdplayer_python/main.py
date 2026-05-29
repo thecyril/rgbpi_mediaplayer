@@ -231,6 +231,7 @@ class App:
         self._js_axis_state: dict[int, tuple[bool, bool]] = {}
         self._js_pending_combo_button: Optional[int] = None
         self._js_pending_combo_at = 0.0
+        self._last_volume_repeat = 0.0
 
         self.local_roots = [Path(p) for p in ROOT_BROWSE_PATHS if Path(p).is_dir()]
         self._start_joystick_listener()
@@ -599,6 +600,12 @@ class App:
             if now - self.last_bookmark_save >= BOOKMARK_SAVE_INTERVAL:
                 self.persist_bookmark(force=False)
                 self.last_bookmark_save = now
+            # Right-stick held-to-repeat volume: the edge press fires the
+            # first step via dispatch; while the stick stays past the
+            # threshold, repeat ~10×/s so holding ramps the volume.
+            neg, pos = self._js_axis_state.get(_VOLUME_AXIS, (False, False))
+            if (neg or pos) and now - self._last_volume_repeat >= 0.10:
+                self._adjust_playback_volume(+1 if neg else -1)
             # Drive the HUD's auto-hide timer. Skip while any START/AUDIO/
             # SUBTITLE/INFORMATION overlay is up — those overlays own the
             # screen themselves and would just race the HUD.
@@ -643,6 +650,46 @@ class App:
         except Exception as exc:
             log_event("playback_hud_action_failed", error=str(exc), action="hide")
 
+    def _adjust_playback_volume(self, direction: int) -> None:
+        """Bump the player volume by one step (right-stick / repeat).
+
+        direction: +1 louder, -1 quieter. Step is 5%. In native passthrough
+        the player volume is bit-perfect-ignored, so we just tell the user to
+        use the soundbar remote. Persisted to prefs so it survives restarts.
+        """
+        self._last_volume_repeat = time.time()
+        if not self.playback:
+            return
+        if getattr(self.playback, "audio_mode", "") == "passthrough":
+            if self.playback_overlay is None:
+                try:
+                    self.playback.show_text("VOLUME → SOUNDBAR REMOTE", duration_ms=1400)
+                except Exception:
+                    pass
+            return
+        step = 5
+        current = float(getattr(self.playback_state.prefs, "volume", 72.0) or 0.0)
+        new_value = max(0.0, min(100.0, round(current + step * direction)))
+        if new_value == current:
+            return
+        try:
+            self.playback.set_volume(new_value)
+        except Exception as exc:
+            log_event("playback_volume_failed", error=str(exc))
+            return
+        self.playback_state.prefs.volume = new_value
+        try:
+            self.playback_state.write_prefs()
+        except Exception as exc:
+            log_event("playback_volume_persist_failed", error=str(exc))
+        # OSD only when no menu overlay owns the screen (don't clobber it).
+        if self.playback_overlay is None:
+            try:
+                self.playback.show_text(f"VOLUME  {int(new_value)}%", duration_ms=1200)
+            except Exception:
+                pass
+        log_event("playback_volume", value=new_value, via="stick")
+
     def dispatch(self, action: Action, source: str):
         self.last_input = time.time()
         log_event(
@@ -670,6 +717,12 @@ class App:
             return
         if action == Action.HOME:
             self.go_home()
+            return
+
+        # Right-stick volume — handled globally (only meaningful during
+        # playback), never routed to the per-screen handlers.
+        if action in (Action.VOLUME_UP, Action.VOLUME_DOWN):
+            self._adjust_playback_volume(+1 if action == Action.VOLUME_UP else -1)
             return
 
         if self.playback:
@@ -1508,6 +1561,23 @@ class App:
             return f"MPV {tscale}"
         return "OFF"
 
+    def _audio_output_status(self, audio_codec: str) -> str:
+        """What's actually sent to the audio output (vs the source AUDIO CODEC).
+
+        Reads the strategy chosen at launch (PlaybackSession.audio_mode); for
+        native passthrough the displayed format follows the source codec.
+        """
+        mode = str(getattr(self.playback, "audio_mode", "jack")) if self.playback else "jack"
+        if mode == "dolby51":
+            return "DOLBY DIGITAL 5.1 (OPTICAL)"
+        if mode == "pcm_stereo":
+            return "PCM STEREO (OPTICAL)"
+        if mode == "passthrough":
+            codec = str(audio_codec or "").upper()
+            fmt = "DTS" if "DTS" in codec else "DOLBY DIGITAL"
+            return f"{fmt} PASSTHROUGH (OPTICAL)"
+        return "JACK 3.5MM (STEREO)"
+
     def _open_information_overlay(self):
         if not self.playback:
             return
@@ -1556,11 +1626,13 @@ class App:
             video_fps = f"{video_fps:s} (×{speed_value:.4f} → {video_fps_value * speed_value:.3f})"
         tv_hz = self._current_tv_hz_label()
         interpolation_type = self._current_interpolation_type()
+        audio_out = self._audio_output_status(audio_codec)
         rows = [
             "INFORMATION",
             "",
             f"VIDEO CODEC: {video_codec}",
             f"AUDIO CODEC: {audio_codec}",
+            f"AUDIO OUT: {audio_out}",
             f"VIDEO RESOLUTION: {video_resolution}",
             f"TV RESOLUTION: {tv_resolution}",
             f"VIDEO FPS: {video_fps}",
@@ -2553,6 +2625,11 @@ class App:
             except Exception as exc:
                 log_event("playback_resume_failed", error=str(exc))
 
+        # Volume — the persisted player volume, adjustable live with the
+        # right analog stick (see _adjust_playback_volume). Note: in optical
+        # dolby51 mode keep it near 100% for best AC3 quality (attenuating
+        # before the encode loses dynamic range); in native passthrough the
+        # player volume is ignored (bit-perfect) so use the Q990D remote.
         try:
             self.playback.set_volume(self.playback_state.prefs.volume)
         except Exception:
@@ -3115,6 +3192,12 @@ class App:
     def _ntsc_speedup_subtitle(self) -> str:
         return "ON (inaudible)" if bool(getattr(self.playback_state.prefs, "ntsc_speedup", True)) else "OFF"
 
+    def _audio_output_label(self, value: str) -> str:
+        return "OPTICAL 5.1 (Q990D)" if str(value).lower() in {"optical_5_1", "optical"} else "JACK 3.5MM"
+
+    def _audio_output_subtitle(self) -> str:
+        return self._audio_output_label(getattr(self.playback_state.prefs, "audio_output", "jack"))
+
     def _deinterlace_label(self, value: str) -> str:
         return "BOB" if str(value).lower() == "bob" else "WEAVE"
 
@@ -3136,6 +3219,7 @@ class App:
             "settings_force_43",
             "settings_pal_speedup",
             "settings_ntsc_speedup",
+            "settings_audio_output",
         }
 
     def _is_switchable_setting_item(self, item: ListItem) -> bool:
@@ -3236,6 +3320,17 @@ class App:
             self.message = MessageBox("SETTINGS", f"30P SMOOTHING {label}")
             log_event("settings_ntsc_speedup", enabled=next_value, via=action.value)
             return True
+        if item.kind == "settings_audio_output":
+            # RIGHT = optical 5.1, LEFT = jack. Two-value toggle.
+            next_value = "optical_5_1" if action == Action.RIGHT else "jack"
+            self.playback_state.prefs.audio_output = next_value
+            self.playback_state.write_prefs()
+            self._refresh_settings_items()
+            label = self._audio_output_label(next_value)
+            self.status_line = f"Audio output {label}"
+            self.message = MessageBox("SETTINGS", f"AUDIO OUTPUT {label}")
+            log_event("settings_audio_output", value=next_value, via=action.value)
+            return True
         return False
 
     def _settings_items(self) -> list[ListItem]:
@@ -3269,6 +3364,11 @@ class App:
                 title="VOLUME NORMALIZATION",
                 subtitle=self._volume_normalization_subtitle(),
                 kind="settings_volume_normalization",
+            ),
+            ListItem(
+                title="AUDIO OUTPUT",
+                subtitle=self._audio_output_subtitle(),
+                kind="settings_audio_output",
             ),
             ListItem(
                 title="FORCE 4:3",
@@ -3379,10 +3479,16 @@ def _map_joystick_axis(number: int) -> Optional[tuple[Action, Action]]:
     mapping = {
         0: (Action.LEFT, Action.RIGHT),  # left stick X
         1: (Action.UP, Action.DOWN),  # left stick Y
+        4: (Action.VOLUME_UP, Action.VOLUME_DOWN),  # right stick Y → volume
         6: (Action.LEFT, Action.RIGHT),  # dpad X (xbox/xpad)
         7: (Action.UP, Action.DOWN),  # dpad Y (xbox/xpad)
     }
     return mapping.get(int(number))
+
+
+# Right-stick Y axis number (held-to-repeat volume). Override with
+# DVDPLAYER_VOLUME_AXIS if the controller maps the right stick elsewhere.
+_VOLUME_AXIS = int(os.environ.get("DVDPLAYER_VOLUME_AXIS", "4") or "4")
 
 
 def _now_ms() -> int:
