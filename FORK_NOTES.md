@@ -330,6 +330,13 @@ pick one.
   **0-based**. Verified across three discs (lsdvd title 1 → `dvd://0`, lsdvd 33 →
   `dvd://32`, lsdvd 6 → `dvd://5`), so `session.py` plays `dvd://(dvd_title-1)`.
   Get this wrong and the picker plays the wrong title.
+- **Position-reset gotcha:** DVD sources are non-resumable
+  (`_source_supports_resume` excludes `authored_dvd`), and all titles of one disc
+  image share a single bookmark key (`dvd-iso:<uri>` — the URI ignores
+  `dvd_title`). The bookmark **write** and the resume **apply** in
+  `start_playback` are both now gated on `_source_supports_resume`; without that
+  guard, switching titles seeked the new title to the previous title's position
+  instead of starting at 0.
 
 ## Hardware-specific patches kept outside of git
 
@@ -338,6 +345,7 @@ Some setup steps had to be done in-place on the Pi (no Python code involved). Th
 - `ldconfig -v` on the bundled `linux-arm64-rootfs/usr/lib/aarch64-linux-gnu/` — the bundle ships `.so.X.Y.Z` files but no `.so.X` SONAME symlinks, so `bin/mpv` initially fails to load `liblua5.2.so.0` and friends. Running `ldconfig` once on the directory creates the symlinks.
 - `apt-get install -y --no-install-recommends smbclient` — the player shells out to `smbclient` to list/browse SMB shares (`media/network_backend.py`). It was **not** installed on this image, so every SMB scan returned "No shares found" (the error is now logged as `smb_list_failed`). Targeted install only — never `apt upgrade`.
 - `apt-get install -y --no-install-recommends lsdvd` — the DVD TITLES picker (`media/dvd_titles.py`) shells out to `lsdvd` to enumerate a disc's titles + durations. Without it, the picker logs `dvd_probe_failed` and falls back to playing the disc root (`dvdnav://`). Targeted install only.
+- `apt-get install -y --no-install-recommends libdvdcss2` — CSS decryption for **encrypted commercial DVDs**. libdvdread (used by both `lsdvd` and mpv) dlopen's `libdvdcss.so.2` at runtime; without it lsdvd warns "No css library" and mpv can read the title list but **cannot decrypt the movie's VOBs** — so `dvd://N` plays only the (unencrypted) menu, which looks like "the menu appears but nothing else plays". Installing libdvdcss fixes playback of encrypted discs. Targeted install only.
 - `state/plex_state.json` — written by the player after a PIN link, sometimes records a `plex.direct` URI for a stale machine identifier (Plex.tv keeps resolving old MAC-style server IDs in its `/api/v2/resources` response). When that happens, hand-edit the file to set:
   ```json
   "server_uri": "http://192.168.1.3:32400"

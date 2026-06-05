@@ -2896,7 +2896,16 @@ class App:
         effective_resume_seconds: Optional[float] = None
         if resume_seconds is not None and resume_seconds >= RESUME_MIN_SECONDS:
             effective_resume_seconds = resume_seconds
-        elif not start_from_beginning and resume_bookmark and resume_bookmark.position_seconds >= RESUME_MIN_SECONDS:
+        elif (
+            not start_from_beginning
+            and self._source_supports_resume(source)
+            and resume_bookmark
+            and resume_bookmark.position_seconds >= RESUME_MIN_SECONDS
+        ):
+            # Only resumable sources auto-seek to a bookmark. DVD titles share
+            # one bookmark key per disc image (dvd-iso:<uri>), so without this
+            # guard switching titles would seek the new title to the previous
+            # title's position instead of starting at 0.
             effective_resume_seconds = resume_bookmark.position_seconds
         if effective_resume_seconds is not None:
             try:
@@ -2964,7 +2973,10 @@ class App:
                 self.playback_state.clear_last_played()
             log_event("bookmark_clear", key=self.playback_bookmark_key)
             return
-        if pos >= RESUME_MIN_SECONDS:
+        if pos >= RESUME_MIN_SECONDS and self._source_supports_resume(self.playback_source):
+            # Only resumable sources get a bookmark. DVD titles must not, or the
+            # shared per-disc bookmark key would carry one title's position over
+            # to the next (see start_playback's resume guard).
             self.playback_state.save_bookmark(
                 self.playback_bookmark_key,
                 self.playback_source.title,
