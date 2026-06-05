@@ -29,6 +29,14 @@ HIGH_NORMALIZATION_FILTER = "lavfi=[loudnorm=I=-18:TP=-2:LRA=11]"
 # LCD setup, send_field gives smoother 60p motion at the cost of CPU.
 _BWDIF_MODE = os.environ.get("DVDPLAYER_BWDIF_MODE", "send_field").strip() or "send_field"
 BOB_DEINTERLACE_FILTER = f"bwdif=mode={_BWDIF_MODE}:parity=auto:deint=interlaced"
+
+# Demuxer cache. Bigger read-ahead rides out throughput dips on high-bitrate
+# network (SMB/WiFi) sources — a freeze is a cache underrun. Defaults sized for
+# the 8 GB Pi 4: 60 s / 1 GiB holds ~95 s of 85 Mbit/s content. Override via env.
+# (Note: no cache size helps a file whose *sustained* bitrate exceeds the link —
+# that needs more bandwidth, e.g. Ethernet.)
+MPV_READAHEAD_SECS = os.environ.get("DVDPLAYER_MPV_READAHEAD_SECS", "").strip() or "60"
+MPV_CACHE_SIZE = os.environ.get("DVDPLAYER_MPV_CACHE_SIZE", "").strip() or "1GiB"
 SMOOTH_FPS_FILTER = "fps=60000/1001"
 CABLE_SMOOTH_BLEND_FILTER = "lavfi=[tblend=all_mode=average]"
 _FFMPEG_FILTER_SUPPORT_CACHE: dict[str, bool] = {}
@@ -1329,8 +1337,8 @@ class PlaybackSession:
             "--slang=auto",
             "--audio-display=no",
             "--cache=yes",
-            "--demuxer-max-bytes=256MiB",
-            "--demuxer-readahead-secs=20",
+            f"--demuxer-max-bytes={MPV_CACHE_SIZE}",
+            f"--demuxer-readahead-secs={MPV_READAHEAD_SECS}",
             "--vd-lavc-threads=0",  # 0 = auto, use all CPU cores (helps Pi 4 software MPEG-2 decode)
         ]
         # Keep mpv's built-in deinterlace disabled; we apply bwdif explicitly
