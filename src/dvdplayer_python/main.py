@@ -109,7 +109,11 @@ NETWORK_AUTH_GUEST = "GUEST"
 NETWORK_AUTH_LOGIN = "LOGIN"
 KEYBOARD_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 KEYBOARD_NUMBERS = "0123456789"
-KEYBOARD_SYMBOLS = "._-@"
+# Common-first ordering: the everyday host/email symbols up front, then the
+# full set of ASCII password symbols (incl. ^ and \ for DOMAIN\user in SMB).
+# The keyboard shows one symbol at a time and cycles with LEFT/RIGHT, so the
+# length is free — only the order matters for ergonomics.
+KEYBOARD_SYMBOLS = "._-@!#$%^&*()+=?:;,/<>[]{}|~\\\"'`"
 AUDIO_LANGUAGE_ALIASES = {
     "DUT": ("DUT", "NLD", "NL"),
     "NLD": ("NLD", "DUT", "NL"),
