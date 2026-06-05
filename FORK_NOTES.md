@@ -315,9 +315,12 @@ pick one.
   literal output, `ast.literal_eval` + regex fallback) on an ISO, a VIDEO_TS
   folder, or a block device. Returns `[DvdTitle(index, length_seconds)]`, `[]`
   on any failure.
-- Every DVD launch (local browser ISO/folder, the PLAY DVD picker, single-disc
-  autoplay) routes through `open_dvd_title_picker()` → busy probe → a **DVD
-  TITLES** list. Sub-10 s menu/transition PGCs are hidden (never to empty); the
+- Every DVD launch routes through `open_dvd_title_picker()` → busy probe → a
+  **DVD TITLES** list: local browser ISO/folder, the PLAY DVD picker, single-disc
+  autoplay, **and `.iso`/`.img` files opened from the network (SMB) browser** —
+  these were previously played as raw `video_file`, which is the #1 way to hit
+  the dead-menu symptom since disc images often live on a NAS. lsdvd reads a
+  network-mounted ISO in ~1 s. Sub-10 s menu/transition PGCs are hidden (never to empty); the
   longest title is preselected and marked `★ MAIN FEATURE`; disc order is kept
   so episodic discs stay in order. BACK returns to the browser (nav snapshot).
 - Picking a title sets `PlaybackSource.dvd_title` (the lsdvd index) and plays it

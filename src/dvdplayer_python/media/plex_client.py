@@ -45,6 +45,9 @@ class PlexClient:
             "server_name": None,
             "server_uri": None,
             "server_token": None,
+            # When True, sections are browsed via the /folder endpoint (on-disk
+            # directory tree) instead of /all (flat dump). Toggled with SELECT.
+            "folder_view": False,
         }
         self.cache = {"sections": []}
         self._load()
@@ -86,6 +89,27 @@ class PlexClient:
 
     def server_token(self) -> str:
         return self.state.get("server_token") or self.state.get("auth_token") or ""
+
+    def folder_view(self) -> bool:
+        return bool(self.state.get("folder_view", False))
+
+    def set_folder_view(self, value: bool) -> None:
+        self.state["folder_view"] = bool(value)
+        self._save_state()
+
+    def section_browse_key(self, section_key: str) -> str:
+        """Build the browse path for a section, honouring the folder-view flag.
+
+        `section_key` is the bare section path (`/library/sections/{id}`); any
+        stale `/all` or `/folder` suffix from cache is stripped first so the
+        flag stays the single source of truth.
+        """
+        base = section_key
+        for suffix in ("/folder", "/all"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        return base + ("/folder" if self.folder_view() else "/all")
 
     def reset_link(self) -> None:
         self.state["auth_token"] = None
@@ -169,9 +193,9 @@ class PlexClient:
             title = node.attrib.get("title", "")
             if not key or not title:
                 continue
-            # Use the /folder endpoint (not /all) so the on-disk directory
-            # structure is preserved instead of a flat dump of every file.
-            out.append(PlexNode(title=title, key=f"/library/sections/{key}/folder", subtitle=node.attrib.get("type", "library"), kind="section"))
+            # Store the bare section path; the /all vs /folder suffix is chosen
+            # at browse time from the folder-view flag (see section_browse_key).
+            out.append(PlexNode(title=title, key=f"/library/sections/{key}", subtitle=node.attrib.get("type", "library"), kind="section"))
         self.cache["sections"] = [asdict(item) for item in out]
         self._save_cache()
         return out

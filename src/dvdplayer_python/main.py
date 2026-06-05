@@ -67,6 +67,9 @@ JS_EVENT_BUTTON = 0x01
 JS_EVENT_AXIS = 0x02
 JS_EVENT_INIT = 0x80
 JS_AXIS_THRESHOLD = 20000
+# Disc-image extensions that the network browser should treat as a DVD (route
+# to the title picker) instead of playing as a raw video file.
+DVD_IMAGE_SUFFIXES = {".iso", ".img"}
 OVERLAY_ACTION_TOGGLE_PAUSE = "toggle_pause"
 OVERLAY_ACTION_DVD_MENU = "dvd_menu"
 OVERLAY_ACTION_CHAPTER_PREV = "chapter_prev"
@@ -181,6 +184,10 @@ class App:
         self.home_selected = 0
         self.list_items: list[ListItem] = []
         self.list_selected = 0
+        # When the current LIST level is a Plex section root, this holds that
+        # section's bare key so SELECT can toggle /all <-> /folder in place.
+        # None at every other level (top-level libraries, subfolders, non-Plex).
+        self.plex_toggle_key: Optional[str] = None
         self.dvd_candidates: list[DvdCandidate] = []
         self.dvd_selected = 0
         # DVD TITLES picker: the source whose titles we're listing, and the
@@ -794,6 +801,10 @@ class App:
                 return
         elif action == Action.X and self.list_items:
             self._handle_list_x_action()
+        elif action == Action.SELECT and self.plex_toggle_key:
+            # On a Plex section root, SELECT toggles folder/flat view instead of
+            # acting as BACK.
+            self._toggle_plex_view()
         elif action in {Action.BACK, Action.SELECT}:
             if not self._pop_list_nav():
                 self.go_home()
@@ -819,6 +830,7 @@ class App:
             "items": list(self.list_items),
             "selected": self.list_selected,
             "section": self.section,
+            "plex_toggle_key": self.plex_toggle_key,
         }
 
     def _push_list_nav(self) -> None:
@@ -839,6 +851,7 @@ class App:
         # snapshot — e.g. NETWORK home, so a share just auto-saved (or a root
         # just forgotten) shows immediately on BACK instead of after a relaunch.
         if state.get("rebuild") == "network_home":
+            self.plex_toggle_key = None
             self.open_network_home()
             sel = state.get("selected", 0)
             if 0 <= sel < len(self.list_items):
@@ -848,6 +861,7 @@ class App:
         self.list_items = state["items"]
         self.list_selected = state["selected"]
         self.section = state["section"]
+        self.plex_toggle_key = state.get("plex_toggle_key")
         self._log_list_selection()
         return True
 
@@ -2495,15 +2509,9 @@ class App:
                 nodes = self.plex.library_sections()
                 if not nodes:
                     nodes = self.plex.cached_sections()
+                self.plex_toggle_key = None
                 self._push_list_nav()
-                self.list_items = [ListItem(title=n.title, subtitle=n.subtitle, kind="plex_node", payload={"node": asdict(n)}) for n in nodes]
-                self.list_items.append(
-                    ListItem(
-                        title="EXIT TO RGB-PI",
-                        subtitle="Close DVD player and return",
-                        kind="rgbpi_exit",
-                    )
-                )
+                self.list_items = self._build_plex_list_items(nodes)
                 self.list_selected = 0
                 self.set_screen(Screen.LIST, "PLEX")
                 self._log_list_selection()
@@ -2513,6 +2521,45 @@ class App:
         else:
             self.status_line = "Press A/START"
             self.set_screen(Screen.PLEX_LINK, "PLEX LINK")
+
+    def _build_plex_list_items(self, nodes) -> list[ListItem]:
+        """Build a Plex LIST level: the nodes plus the trailing RGB-PI exit row."""
+        items = [
+            ListItem(title=n.title, subtitle=n.subtitle, kind="plex_node", payload={"node": asdict(n)})
+            for n in nodes
+        ]
+        items.append(
+            ListItem(
+                title="EXIT TO RGB-PI",
+                subtitle="Close DVD player and return",
+                kind="rgbpi_exit",
+            )
+        )
+        return items
+
+    def _toggle_plex_view(self) -> None:
+        """SELECT on a Plex section root: flip /all <-> /folder and re-render.
+
+        Re-fetches the *same* section root in place (same nav depth), so BACK
+        still returns to the library list. The choice persists across restarts.
+        """
+        section_key = self.plex_toggle_key
+        if not section_key:
+            return
+        self.plex.set_folder_view(not self.plex.folder_view())
+        try:
+            nodes = self.plex.browse_path(self.plex.section_browse_key(section_key))
+        except Exception as exc:
+            # Revert the flag so the on-screen list and the flag stay in sync.
+            self.plex.set_folder_view(not self.plex.folder_view())
+            self.message = MessageBox("PLEX", f"Network error: {exc}")
+            log_event("plex_toggle_failed", error=str(exc))
+            return
+        self.list_items = self._build_plex_list_items(nodes)
+        self.list_selected = 0
+        self.status_line = "By folder" if self.plex.folder_view() else "All items"
+        log_event("plex_view_toggled", folder_view=self.plex.folder_view(), section=self.section)
+        self._log_list_selection()
 
     def open_media_server_menu(self):
         youtube_state = self._youtube_state_obj().link_state
@@ -2704,7 +2751,22 @@ class App:
                     host.get("username"),
                     host.get("password"),
                 )
-                if media_path:
+                if media_path and Path(media_path).suffix.lower() in DVD_IMAGE_SUFFIXES:
+                    # A DVD disc image on the share. mpv can't drive its menu, so
+                    # route through the title picker (which probes with lsdvd and
+                    # falls back to dvdnav:// if it turns out not to be a DVD).
+                    log_event("network_dvd_image", title=entry.get("title"), path=media_path, protocol=protocol)
+                    self.open_dvd_title_picker(
+                        PlaybackSource(
+                            title=entry.get("title", "DVD"),
+                            kind=PlaybackKind.DVD_ISO,
+                            uri=media_path,
+                            subtitle=f"{host.get('display_name', protocol or 'NETWORK')} {entry.get('subtitle','')}",
+                            authored_dvd=True,
+                            container="iso",
+                        )
+                    )
+                elif media_path:
                     log_event("network_playback_path", title=entry.get("title", "Network Video"), path=media_path, protocol=protocol)
                     self.start_playback(
                         PlaybackSource(
@@ -2733,16 +2795,18 @@ class App:
             node = item.payload.get("node", {})
             kind = node.get("kind")
             if kind in {"section", "directory"}:
-                nodes = self.plex.browse_path(node.get("key", ""))
+                section_key = node.get("key", "")
+                if kind == "section":
+                    # Section root: apply the /all-vs-/folder flag and arm SELECT.
+                    browse_key = self.plex.section_browse_key(section_key)
+                else:
+                    # Subfolder: browse as-is, and disarm the toggle (only the
+                    # section root switches views).
+                    browse_key = section_key
+                nodes = self.plex.browse_path(browse_key)
                 self._push_list_nav()
-                self.list_items = [ListItem(title=n.title, subtitle=n.subtitle, kind="plex_node", payload={"node": asdict(n)}) for n in nodes]
-                self.list_items.append(
-                    ListItem(
-                        title="EXIT TO RGB-PI",
-                        subtitle="Close DVD player and return",
-                        kind="rgbpi_exit",
-                    )
-                )
+                self.plex_toggle_key = section_key if kind == "section" else None
+                self.list_items = self._build_plex_list_items(nodes)
                 self.list_selected = 0
                 self.section = f"PLEX {node.get('title','')}"
                 self._log_list_selection()
@@ -3068,6 +3132,11 @@ class App:
                 footer = "A OPEN   X FORGET   B BACK"
             elif self.section == "DVD TITLES":
                 footer = "A PLAY TITLE   B BACK"
+            if self.plex_toggle_key:
+                # On a Plex section root SELECT toggles the view; show what it
+                # switches TO so the label tracks the current mode.
+                alt = "FLAT" if self.plex.folder_view() else "FOLDERS"
+                footer = f"A OPEN   SELECT {alt}   B BACK"
             selected = visible_selected
 
         model = RenderModel(
@@ -3109,6 +3178,7 @@ class App:
         self._clear_list_nav()
         self.list_items = []
         self.list_selected = 0
+        self.plex_toggle_key = None
         self.set_screen(Screen.HOME, "HOME")
 
     def _write_runtime_state(self):
