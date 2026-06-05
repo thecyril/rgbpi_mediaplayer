@@ -108,12 +108,15 @@ HOME_MENU_SIZE = 5
 NETWORK_AUTH_GUEST = "GUEST"
 NETWORK_AUTH_LOGIN = "LOGIN"
 KEYBOARD_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+KEYBOARD_LOWERCASE = "abcdefghijklmnopqrstuvwxyz"
 KEYBOARD_NUMBERS = "0123456789"
 # Common-first ordering: the everyday host/email symbols up front, then the
 # full set of ASCII password symbols (incl. ^ and \ for DOMAIN\user in SMB).
 # The keyboard shows one symbol at a time and cycles with LEFT/RIGHT, so the
 # length is free — only the order matters for ergonomics.
 KEYBOARD_SYMBOLS = "._-@!#$%^&*()+=?:;,/<>[]{}|~\\\"'`"
+# Selectable keyboard rows: UPPERCASE, lowercase, NUMBERS, SYMBOLS, SPACE, DONE.
+KEYBOARD_ROWS = 6
 AUDIO_LANGUAGE_ALIASES = {
     "DUT": ("DUT", "NLD", "NL"),
     "NLD": ("NLD", "DUT", "NL"),
@@ -220,6 +223,7 @@ class App:
         self.keyboard_value = ""
         self.keyboard_selected = 1
         self.keyboard_letter_index = 0
+        self.keyboard_lower_index = 0
         self.keyboard_number_index = 0
         self.keyboard_symbol_index = 0
         self.keyboard_host: dict = {}
@@ -922,10 +926,10 @@ class App:
 
     def handle_keyboard_action(self, action: Action):
         if action == Action.UP:
-            self.keyboard_selected = 5 if self.keyboard_selected <= 1 else self.keyboard_selected - 1
+            self.keyboard_selected = KEYBOARD_ROWS if self.keyboard_selected <= 1 else self.keyboard_selected - 1
             return
         if action == Action.DOWN:
-            self.keyboard_selected = 1 if self.keyboard_selected >= 5 else self.keyboard_selected + 1
+            self.keyboard_selected = 1 if self.keyboard_selected >= KEYBOARD_ROWS else self.keyboard_selected + 1
             return
         if action == Action.LEFT:
             self._keyboard_shift(-1)
@@ -948,15 +952,18 @@ class App:
             self.keyboard_value += KEYBOARD_LETTERS[self.keyboard_letter_index]
             return
         if self.keyboard_selected == 2:
-            self.keyboard_value += KEYBOARD_NUMBERS[self.keyboard_number_index]
+            self.keyboard_value += KEYBOARD_LOWERCASE[self.keyboard_lower_index]
             return
         if self.keyboard_selected == 3:
-            self.keyboard_value += KEYBOARD_SYMBOLS[self.keyboard_symbol_index]
+            self.keyboard_value += KEYBOARD_NUMBERS[self.keyboard_number_index]
             return
         if self.keyboard_selected == 4:
-            self.keyboard_value += " "
+            self.keyboard_value += KEYBOARD_SYMBOLS[self.keyboard_symbol_index]
             return
         if self.keyboard_selected == 5:
+            self.keyboard_value += " "
+            return
+        if self.keyboard_selected == 6:
             self._submit_keyboard_value()
 
     def handle_plex_link_action(self, action: Action):
@@ -1994,6 +2001,7 @@ class App:
         self.keyboard_saved_password = saved_password
         self.keyboard_selected = 1
         self.keyboard_letter_index = 0
+        self.keyboard_lower_index = 0
         self.keyboard_number_index = 0
         self.keyboard_symbol_index = 0
         self.set_screen(Screen.KEYBOARD, title)
@@ -2013,9 +2021,12 @@ class App:
             self.keyboard_letter_index = (self.keyboard_letter_index + direction) % len(KEYBOARD_LETTERS)
             return
         if self.keyboard_selected == 2:
-            self.keyboard_number_index = (self.keyboard_number_index + direction) % len(KEYBOARD_NUMBERS)
+            self.keyboard_lower_index = (self.keyboard_lower_index + direction) % len(KEYBOARD_LOWERCASE)
             return
         if self.keyboard_selected == 3:
+            self.keyboard_number_index = (self.keyboard_number_index + direction) % len(KEYBOARD_NUMBERS)
+            return
+        if self.keyboard_selected == 4:
             self.keyboard_symbol_index = (self.keyboard_symbol_index + direction) % len(KEYBOARD_SYMBOLS)
 
     def _submit_keyboard_value(self):
@@ -2053,7 +2064,8 @@ class App:
         display = masked if masked else "(empty)"
         return [
             ("INPUT", display[-20:], True),
-            ("LETTERS", f"[{KEYBOARD_LETTERS[self.keyboard_letter_index]}]", True),
+            ("UPPERCASE", f"[{KEYBOARD_LETTERS[self.keyboard_letter_index]}]", True),
+            ("lowercase", f"[{KEYBOARD_LOWERCASE[self.keyboard_lower_index]}]", True),
             ("NUMBERS", f"[{KEYBOARD_NUMBERS[self.keyboard_number_index]}]", True),
             ("SYMBOLS", f"[{KEYBOARD_SYMBOLS[self.keyboard_symbol_index]}]", True),
             ("SPACE", "ADD SPACE", True),
