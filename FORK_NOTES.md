@@ -254,6 +254,7 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
 Some setup steps had to be done in-place on the Pi (no Python code involved). They are not in the repo but are mandatory for the player to run on this hardware:
 
 - `ldconfig -v` on the bundled `linux-arm64-rootfs/usr/lib/aarch64-linux-gnu/` — the bundle ships `.so.X.Y.Z` files but no `.so.X` SONAME symlinks, so `bin/mpv` initially fails to load `liblua5.2.so.0` and friends. Running `ldconfig` once on the directory creates the symlinks.
+- `apt-get install -y --no-install-recommends smbclient` — the player shells out to `smbclient` to list/browse SMB shares (`media/network_backend.py`). It was **not** installed on this image, so every SMB scan returned "No shares found" (the error is now logged as `smb_list_failed`). Targeted install only — never `apt upgrade`.
 - `state/plex_state.json` — written by the player after a PIN link, sometimes records a `plex.direct` URI for a stale machine identifier (Plex.tv keeps resolving old MAC-style server IDs in its `/api/v2/resources` response). When that happens, hand-edit the file to set:
   ```json
   "server_uri": "http://192.168.1.3:32400"
