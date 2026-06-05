@@ -229,6 +229,7 @@ class App:
         self.keyboard_host: dict = {}
         self.keyboard_username = ""
         self.keyboard_saved_password = ""
+        self.keyboard_nav: Optional[dict] = None
         self.started_at_ms = _now_ms()
         self.active_tty = _detect_tty()
         if self.active_tty:
@@ -787,7 +788,7 @@ class App:
             if self._adjust_switchable_setting(item, action):
                 return
         elif action == Action.X and self.list_items:
-            self._save_selected_network_favorite()
+            self._handle_list_x_action()
         elif action in {Action.BACK, Action.SELECT}:
             if not self._pop_list_nav():
                 self.go_home()
@@ -800,24 +801,56 @@ class App:
             log_event("list_accept", selected=self.list_selected, title=item.title, kind=item.kind, path=item.path, via=action.value)
             self.activate_list_item(item)
 
-    def _push_list_nav(self) -> None:
-        """Snapshot the current list state so BACK can restore it later."""
-        self.list_nav_stack.append({
+    def _make_nav_snapshot(self) -> dict:
+        """Capture the current list level so it can be restored by BACK later.
+
+        Used by the async network browser: the snapshot is taken while the
+        source list is still on screen, stashed in the browse payload, and
+        committed to the nav stack only once the child level loads. That keeps
+        the snapshot's `section` correct even though an auth popup / busy screen
+        sits between leaving the parent and showing the child.
+        """
+        return {
             "items": list(self.list_items),
             "selected": self.list_selected,
             "section": self.section,
-        })
+        }
+
+    def _push_list_nav(self) -> None:
+        """Snapshot the current list state so BACK can restore it later."""
+        self.list_nav_stack.append(self._make_nav_snapshot())
+
+    def _push_nav_snapshot(self, snapshot: Optional[dict]) -> None:
+        """Commit a previously captured snapshot (from `_make_nav_snapshot`)."""
+        if snapshot:
+            self.list_nav_stack.append(snapshot)
 
     def _pop_list_nav(self) -> bool:
         """Restore the previous list state. Returns False when the stack is empty."""
         if not self.list_nav_stack:
             return False
         state = self.list_nav_stack.pop()
+        # Some levels are rebuilt live rather than restored from a stale
+        # snapshot — e.g. NETWORK home, so a share just auto-saved (or a root
+        # just forgotten) shows immediately on BACK instead of after a relaunch.
+        if state.get("rebuild") == "network_home":
+            self.open_network_home()
+            sel = state.get("selected", 0)
+            if 0 <= sel < len(self.list_items):
+                self.list_selected = sel
+                self._log_list_selection()
+            return True
         self.list_items = state["items"]
         self.list_selected = state["selected"]
         self.section = state["section"]
         self._log_list_selection()
         return True
+
+    def _network_home_nav_snapshot(self) -> dict:
+        """A NETWORK-home snapshot that is regenerated (not restored) on BACK."""
+        snap = self._make_nav_snapshot()
+        snap["rebuild"] = "network_home"
+        return snap
 
     def _clear_list_nav(self) -> None:
         """Reset the nav history (called when leaving the LIST screen entirely)."""
@@ -907,8 +940,9 @@ class App:
             return
         if self.confirm_context == "smb_auth":
             host = dict(self.confirm_payload.get("host", {}))
+            nav = self.confirm_payload.get("nav")
             if choice == NETWORK_AUTH_GUEST:
-                self._start_network_host_browse(host, None, None)
+                self._start_network_host_browse(host, None, None, nav=nav)
                 return
             if choice == NETWORK_AUTH_LOGIN:
                 saved = self.network.saved_credentials("SMB", host.get("address", host.get("host", "")))
@@ -920,6 +954,7 @@ class App:
                     initial=username,
                     username="",
                     saved_password=password,
+                    nav=nav,
                 )
                 return
         self._close_confirm_popup()
@@ -1948,12 +1983,13 @@ class App:
         self.set_screen(Screen.LIST, "ADD NETWORK")
         self._log_list_selection()
 
-    def _open_smb_auth_popup(self, host: dict):
+    def _open_smb_auth_popup(self, host: dict, nav: Optional[dict] = None):
         self.confirm_context = "smb_auth"
         self.confirm_options = [NETWORK_AUTH_GUEST, NETWORK_AUTH_LOGIN]
         self.confirm_selected = 0
         self.confirm_payload = {
             "host": dict(host),
+            "nav": nav,
             "return_section": self.section,
             "return_screen": getattr(getattr(self, "screen", None), "value", Screen.LIST.value),
         }
@@ -1992,6 +2028,7 @@ class App:
         initial: str,
         username: str,
         saved_password: str,
+        nav: Optional[dict] = None,
     ):
         self.keyboard_context = context
         self.keyboard_title = title
@@ -1999,6 +2036,7 @@ class App:
         self.keyboard_value = initial or ""
         self.keyboard_username = username
         self.keyboard_saved_password = saved_password
+        self.keyboard_nav = nav
         self.keyboard_selected = 1
         self.keyboard_letter_index = 0
         self.keyboard_lower_index = 0
@@ -2013,6 +2051,7 @@ class App:
         self.keyboard_host = {}
         self.keyboard_username = ""
         self.keyboard_saved_password = ""
+        self.keyboard_nav = None
         self.keyboard_selected = 1
         self.set_screen(Screen.CONFIRM, "SMB AUTH")
 
@@ -2041,11 +2080,13 @@ class App:
                 initial=self.keyboard_saved_password,
                 username=value.strip(),
                 saved_password="",
+                nav=self.keyboard_nav,
             )
             return
         if context == "smb_pass":
             username = self.keyboard_username.strip()
             password = value
+            nav = self.keyboard_nav
             if username:
                 self.network.save_credentials(
                     "SMB",
@@ -2054,7 +2095,7 @@ class App:
                     username,
                     password,
                 )
-            self._start_network_host_browse(host, username or None, password or None)
+            self._start_network_host_browse(host, username or None, password or None, nav=nav)
             return
         self._close_keyboard_input()
 
@@ -2072,7 +2113,7 @@ class App:
             ("DONE", "B=DELETE", True),
         ]
 
-    def _start_network_host_browse(self, host: dict, username: Optional[str], password: Optional[str]):
+    def _start_network_host_browse(self, host: dict, username: Optional[str], password: Optional[str], nav: Optional[dict] = None):
         protocol = host.get("protocol", "SMB")
         browse_host = dict(host)
         browse_host["username"] = username
@@ -2087,6 +2128,7 @@ class App:
         self.keyboard_host = {}
         self.keyboard_username = ""
         self.keyboard_saved_password = ""
+        self.keyboard_nav = None
         self._start_busy(
             "browse_host",
             f"OPENING {protocol}",
@@ -2095,10 +2137,70 @@ class App:
         )
         thread = threading.Thread(
             target=self._browse_network_worker,
-            args=({"kind": "host", "host": browse_host, "username": username, "password": password},),
+            args=({"kind": "host", "host": browse_host, "username": username, "password": password, "nav": nav},),
             daemon=True,
         )
         thread.start()
+
+    def _handle_list_x_action(self):
+        """X is context sensitive on the LIST screen:
+
+        - on a saved NETWORK root  → forget it (remove from persistence)
+        - on a network folder/share → pin it as a favourite saved root
+        """
+        if not self.list_items:
+            return
+        item = self.list_items[self.list_selected]
+        if item.kind == "network_root":
+            self._remove_selected_network_root(item)
+            return
+        if item.kind == "network_entry":
+            self._save_selected_network_favorite()
+
+    def _remove_selected_network_root(self, item: ListItem):
+        root = item.payload.get("root", {})
+        root_id = root.get("id", "")
+        if root_id and self.network.remove_root(root_id):
+            log_event("network_root_removed", protocol=root.get("protocol"), host=root.get("host"), root_name=root.get("root_name"))
+            self.message = MessageBox("NETWORK", "CONNECTION FORGOTTEN")
+            # Rebuild the NETWORK home in place so the row disappears, keeping
+            # the cursor in range.
+            self.open_network_home()
+        else:
+            self.message = MessageBox("NETWORK", "NOTHING TO REMOVE")
+
+    def _maybe_autosave_network_root(self, payload: dict):
+        """Persist a share the first time it is opened.
+
+        Only the share root itself (path "/") is a "connection" worth
+        remembering; deeper folders are navigation within it. Saving here means
+        the share reappears under NETWORK on the next launch — tapping it
+        re-browses directly with the stored credentials, no subnet scan.
+        """
+        if payload.get("kind") != "entry":
+            return
+        entry = payload.get("entry", {}) or {}
+        host = payload.get("host", {}) or {}
+        if not entry.get("is_dir"):
+            return
+        if (entry.get("path") or "/").strip().strip("/") != "":
+            return
+        root_name = entry.get("root_name", "")
+        if not root_name:
+            return
+        protocol = entry.get("protocol") or host.get("protocol") or "SMB"
+        saved = make_saved_root(
+            protocol=protocol,
+            display_name=f"{host.get('display_name', host.get('host', 'HOST'))} {root_name}",
+            host=host.get("host", ""),
+            address=host.get("address", host.get("host", "")),
+            root_name=root_name,
+            path="/",
+            username=host.get("username"),
+            password=host.get("password"),
+        )
+        self.network.add_root(saved)  # idempotent: dedups by id, persists to disk
+        log_event("network_root_autosaved", protocol=protocol, host=saved.host, root_name=root_name)
 
     def _save_selected_network_favorite(self):
         if not self.list_items:
@@ -2129,9 +2231,9 @@ class App:
         self.message = MessageBox("NETWORK", "SAVED AS FAV.")
         log_event("network_root_saved", protocol=saved.protocol, host=saved.host, root_name=saved.root_name, path=saved.path)
 
-    def scan_network(self, protocol: str):
+    def scan_network(self, protocol: str, nav: Optional[dict] = None):
         self._start_busy(f"scan_{protocol.lower()}", f"SCANNING FOR {protocol}", Screen.LIST, f"SCAN {protocol}")
-        thread = threading.Thread(target=self._scan_network_worker, args=(protocol,), daemon=True)
+        thread = threading.Thread(target=self._scan_network_worker, args=(protocol, nav), daemon=True)
         thread.start()
 
     def _start_busy(self, context: str, label: str, return_screen: Screen, return_section: str):
@@ -2143,12 +2245,13 @@ class App:
         self.busy_return_section = return_section
         self.set_screen(Screen.BUSY, "BUSY")
 
-    def _scan_network_worker(self, protocol: str):
+    def _scan_network_worker(self, protocol: str, nav: Optional[dict] = None):
+        meta = {"protocol": protocol, "nav": nav}
         try:
             hosts = self.network.discover_hosts(protocol)
-            self.background_queue.put(("scan_network_done", protocol, hosts, None))
+            self.background_queue.put(("scan_network_done", meta, hosts, None))
         except Exception as exc:
-            self.background_queue.put(("scan_network_done", protocol, None, str(exc)))
+            self.background_queue.put(("scan_network_done", meta, None, str(exc)))
 
     def _browse_network_worker(self, payload: dict):
         kind = payload.get("kind")
@@ -2213,8 +2316,16 @@ class App:
             elif event == "youtube_resolve_done":
                 self._finish_youtube_resolve(payload, result, error)
 
-    def _finish_network_scan(self, protocol: str, hosts, error: Optional[str]):
+    def _finish_network_scan(self, payload, hosts, error: Optional[str]):
+        if isinstance(payload, dict):
+            protocol = payload.get("protocol", "SMB")
+            nav = payload.get("nav")
+        else:  # backwards-compat: debug-UI calls pass a bare protocol string
+            protocol = str(payload)
+            nav = None
         self._clear_busy()
+        # BACK from the host list returns to ADD NETWORK, not the main menu.
+        self._push_nav_snapshot(nav)
         if error:
             self.list_items = []
             self.list_selected = 0
@@ -2235,6 +2346,10 @@ class App:
     def _finish_network_browse(self, payload: dict, entries, error: Optional[str]):
         kind = payload.get("kind", "root")
         self._clear_busy()
+        # Whether the browse succeeds or fails we have *left* the parent list,
+        # so commit its snapshot — BACK then returns one level up instead of
+        # falling through to the main menu.
+        self._push_nav_snapshot(payload.get("nav"))
         if error:
             self.list_items = []
             self.list_selected = 0
@@ -2242,6 +2357,10 @@ class App:
             self.message = MessageBox("NETWORK", "Browse failed")
             log_event("network_browse_failed", kind=kind, error=error)
             return
+
+        # The connection is valid — remember the share so it persists in
+        # NETWORK home without another scan next time.
+        self._maybe_autosave_network_root(payload)
 
         items = entries or []
         if kind == "host":
@@ -2374,6 +2493,7 @@ class App:
             return
 
         if item.kind == "browser_network":
+            self._push_list_nav()
             self.open_network_home()
             return
 
@@ -2468,21 +2588,23 @@ class App:
             return
 
         if item.kind == "network_add":
+            self._push_nav_snapshot(self._network_home_nav_snapshot())
             self.open_network_add()
             return
 
         if item.kind in {"scan_smb", "scan_nfs"}:
             protocol = "SMB" if item.kind == "scan_smb" else "NFS"
-            self.scan_network(protocol)
+            self.scan_network(protocol, nav=self._make_nav_snapshot())
             return
 
         if item.kind == "host":
             host = item.payload.get("host", {})
             protocol = host.get("protocol", "SMB")
+            nav = self._make_nav_snapshot()
             if protocol == "SMB":
-                self._open_smb_auth_popup(host)
+                self._open_smb_auth_popup(host, nav=nav)
             else:
-                self._start_network_host_browse(host, None, None)
+                self._start_network_host_browse(host, None, None, nav=nav)
             return
 
         if item.kind == "network_entry":
@@ -2492,7 +2614,7 @@ class App:
             if entry.get("is_dir"):
                 title = entry.get("title", "Folder")
                 self._start_busy("browse_entry", f"Opening {title}", Screen.LIST, f"{protocol} {entry.get('root_name', '')}")
-                thread = threading.Thread(target=self._browse_network_worker, args=({"kind": "entry", "entry": entry, "host": host},), daemon=True)
+                thread = threading.Thread(target=self._browse_network_worker, args=({"kind": "entry", "entry": entry, "host": host, "nav": self._make_nav_snapshot()},), daemon=True)
                 thread.start()
             else:
                 media_path = self.network.resolve_media_path(
@@ -2524,7 +2646,7 @@ class App:
             root = item.payload.get("root", {})
             protocol = root.get("protocol", "SMB")
             self._start_busy("browse_root", f"Opening {protocol}", Screen.LIST, f"{protocol} {root.get('root_name', '')}")
-            thread = threading.Thread(target=self._browse_network_worker, args=({"kind": "root", "root": root},), daemon=True)
+            thread = threading.Thread(target=self._browse_network_worker, args=({"kind": "root", "root": root, "nav": self._network_home_nav_snapshot()},), daemon=True)
             thread.start()
             return
 
@@ -2863,6 +2985,8 @@ class App:
                 footer = "L/R CHANGE   A OPEN   B BACK"
             if any(item.kind == "network_entry" for item in self.list_items):
                 footer = "A OPEN   X SAVE FAV   B BACK"
+            elif any(item.kind == "network_root" for item in self.list_items):
+                footer = "A OPEN   X FORGET   B BACK"
             selected = visible_selected
 
         model = RenderModel(
