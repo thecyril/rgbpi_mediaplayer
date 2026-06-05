@@ -234,6 +234,10 @@ class NetworkBackend:
             name, is_dir, size = parsed
             if not name or name in (".", ".."):
                 continue
+            if name.startswith("."):
+                # Skip dotfiles (.DS_Store, ._AppleDouble, …) — same as the
+                # NFS browser, so media listings aren't cluttered with junk.
+                continue
             items.append(
                 BrowseEntry(
                     protocol="SMB",
