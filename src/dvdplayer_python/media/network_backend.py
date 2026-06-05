@@ -200,10 +200,28 @@ class NetworkBackend:
         user = username or "guest"
         pwd = password or ""
         rel = _normalize(path).lstrip("/")
-        cmd = ["smbclient", f"//{host}/{share}", "-U", f"{user}%{pwd}", "-c", f"ls {rel}" if rel else "ls"]
+        # `ls <dir>` treats <dir> as a filename *mask* in the current working
+        # directory — it matches only the folder entry itself, so you end up
+        # "inside" a folder that lists a single child of the same name and then
+        # "Folder is empty" one level deeper. To list a subfolder's *contents*
+        # we must cd into it first; smbclient's path separator is backslash.
+        if rel:
+            smb_dir = rel.replace("/", "\\")
+            command = f'cd "{smb_dir}"; ls'
+        else:
+            command = "ls"
+        cmd = ["smbclient", f"//{host}/{share}", "-U", f"{user}%{pwd}", "-c", command]
         try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
-        except Exception:
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+        except FileNotFoundError:
+            log_event("smb_browse_failed", host=host, share=share, error="smbclient not installed")
+            return []
+        except subprocess.CalledProcessError as exc:
+            tail = (exc.output or "").strip().splitlines()[-1:] if exc.output else []
+            log_event("smb_browse_failed", host=host, share=share, path=rel, rc=exc.returncode, error="; ".join(tail) or "smbclient error")
+            return []
+        except Exception as exc:
+            log_event("smb_browse_failed", host=host, share=share, path=rel, error=str(exc))
             return []
         items: List[BrowseEntry] = []
         for line in out.splitlines():
