@@ -66,6 +66,11 @@ class PlaybackSource:
     hint_width: Optional[int] = None
     hint_height: Optional[int] = None
     hint_fps: Optional[float] = None
+    # For authored DVDs (ISO / VIDEO_TS / optical): the specific title to play,
+    # chosen from the DVD TITLES list. None → play the disc root (dvdnav://).
+    # mpv 0.32 dropped interactive DVD-menu navigation, so the user picks a
+    # title directly instead of clicking a dead on-screen menu.
+    dvd_title: Optional[int] = None
 
 
 @dataclass

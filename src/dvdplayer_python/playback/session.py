@@ -1384,7 +1384,19 @@ class PlaybackSession:
             )
 
         if source.kind in {PlaybackKind.DVD_FOLDER, PlaybackKind.DVD_ISO, PlaybackKind.OPTICAL_DRIVE}:
-            args += [f"--dvd-device={source.uri}", "dvdnav://"]
+            args.append(f"--dvd-device={source.uri}")
+            # mpv 0.32 can't navigate DVD menus, so when the user has picked a
+            # title from the DVD TITLES list we play it directly via dvd://N
+            # (libdvdread, no menu). dvd_title=None keeps the old dvdnav:// path.
+            #
+            # Index base differs: lsdvd numbers titles 1..N, but mpv's dvd://
+            # is 0-based (verified on 3 discs: lsdvd title 1 → dvd://0, lsdvd 33
+            # → dvd://32). So subtract 1 to map the picker's lsdvd index to mpv.
+            dvd_title = getattr(source, "dvd_title", None)
+            if dvd_title:
+                args.append(f"dvd://{max(0, int(dvd_title) - 1)}")
+            else:
+                args.append("dvdnav://")
         else:
             args += [source.uri]
 

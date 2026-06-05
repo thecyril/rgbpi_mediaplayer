@@ -299,12 +299,42 @@ file), owner-only perms, and no git-commit exposure. For real secret-at-rest you
 would have to drop unattended reconnect and prompt for the password each boot
 (keep username only) — offered to the user, declined in favour of zero friction.
 
+## DVD title picker (mpv can't navigate DVD menus)
+
+**Why:** mpv removed interactive DVD-menu support years ago. In the bundled
+**mpv 0.32.0** there is no `dvdnav`/`discnav` input command at all (verified via
+`--input-cmdlist`), and the internal menu handler (`player/discnav.c`) is gone.
+`dvdnav://` is now just an alias for `dvd://`: the menu *video* plays but the
+buttons are dead, so opening an ISO/VIDEO_TS dead-ended on an unnavigable menu.
+Upstream tracks this as [mpv#14370](https://github.com/mpv-player/mpv/issues/14370).
+
+**Fix:** instead of a dead menu, enumerate the disc's titles and let the user
+pick one.
+
+- `media/dvd_titles.py` — `probe_dvd_titles(device)` runs `lsdvd -Oy` (Python-
+  literal output, `ast.literal_eval` + regex fallback) on an ISO, a VIDEO_TS
+  folder, or a block device. Returns `[DvdTitle(index, length_seconds)]`, `[]`
+  on any failure.
+- Every DVD launch (local browser ISO/folder, the PLAY DVD picker, single-disc
+  autoplay) routes through `open_dvd_title_picker()` → busy probe → a **DVD
+  TITLES** list. Sub-10 s menu/transition PGCs are hidden (never to empty); the
+  longest title is preselected and marked `★ MAIN FEATURE`; disc order is kept
+  so episodic discs stay in order. BACK returns to the browser (nav snapshot).
+- Picking a title sets `PlaybackSource.dvd_title` (the lsdvd index) and plays it
+  via `dvd://N` (libdvdread, no menu). If the probe fails it falls back to
+  `dvdnav://` so nothing dead-ends.
+- **Index base gotcha:** lsdvd numbers titles 1..N but mpv's `dvd://` is
+  **0-based**. Verified across three discs (lsdvd title 1 → `dvd://0`, lsdvd 33 →
+  `dvd://32`, lsdvd 6 → `dvd://5`), so `session.py` plays `dvd://(dvd_title-1)`.
+  Get this wrong and the picker plays the wrong title.
+
 ## Hardware-specific patches kept outside of git
 
 Some setup steps had to be done in-place on the Pi (no Python code involved). They are not in the repo but are mandatory for the player to run on this hardware:
 
 - `ldconfig -v` on the bundled `linux-arm64-rootfs/usr/lib/aarch64-linux-gnu/` — the bundle ships `.so.X.Y.Z` files but no `.so.X` SONAME symlinks, so `bin/mpv` initially fails to load `liblua5.2.so.0` and friends. Running `ldconfig` once on the directory creates the symlinks.
 - `apt-get install -y --no-install-recommends smbclient` — the player shells out to `smbclient` to list/browse SMB shares (`media/network_backend.py`). It was **not** installed on this image, so every SMB scan returned "No shares found" (the error is now logged as `smb_list_failed`). Targeted install only — never `apt upgrade`.
+- `apt-get install -y --no-install-recommends lsdvd` — the DVD TITLES picker (`media/dvd_titles.py`) shells out to `lsdvd` to enumerate a disc's titles + durations. Without it, the picker logs `dvd_probe_failed` and falls back to playing the disc root (`dvdnav://`). Targeted install only.
 - `state/plex_state.json` — written by the player after a PIN link, sometimes records a `plex.direct` URI for a stale machine identifier (Plex.tv keeps resolving old MAC-style server IDs in its `/api/v2/resources` response). When that happens, hand-edit the file to set:
   ```json
   "server_uri": "http://192.168.1.3:32400"
@@ -351,4 +381,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 5 juin 2026 (SMB persistence + BACK nav; subfolder-listing fix; password at-rest obfuscation)._
+_Last updated: 5 juin 2026 (DVD title picker — mpv dropped DVD-menu nav; lsdvd enumeration, 0-based dvd:// index)._
