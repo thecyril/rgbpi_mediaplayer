@@ -280,8 +280,24 @@ Two related fixes to the **BROWSER → NETWORK** flow (`main.py`, `media/network
   `… X SAVE FAV …`).
 
 Credentials note: the stored root embeds the SMB username/password in
-`network_sources.json` (plaintext, same as the pre-existing `credentials` block —
-this is a single-user living-room appliance). Guest shares save with no creds.
+`network_sources.json`. Guest shares save with no creds.
+
+**Password at-rest obfuscation.** Passwords in `network_sources.json` are
+XOR+base64 obfuscated with a per-install key (`state/credentials.key`, owner-only
+0600). On load they are decoded back to plaintext in memory, so the rest of the
+code is unchanged; the encode/decode happens only at the disk boundary. A legacy
+plaintext file is auto-upgraded on first load (detected via the absence of the
+`"obfuscated": true` flag). Both files are `chmod 600`, and
+`network_sources.json` is gitignored so it can never be committed.
+
+This is **obfuscation, not encryption** — and deliberately so. The player must
+reconnect to SMB unattended, so the key has to live on the Pi next to the data;
+anyone with root / the SD card can still recover the password. There is no way
+around that on an auto-connecting appliance. The obfuscation buys: no
+human-readable password on disk (screenshots, casual `cat`, a shared/leaked
+file), owner-only perms, and no git-commit exposure. For real secret-at-rest you
+would have to drop unattended reconnect and prompt for the password each boot
+(keep username only) — offered to the user, declined in favour of zero friction.
 
 ## Hardware-specific patches kept outside of git
 
@@ -335,4 +351,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 5 juin 2026 (SMB connection persistence + network BACK navigation; X-to-forget)._
+_Last updated: 5 juin 2026 (SMB persistence + BACK nav; subfolder-listing fix; password at-rest obfuscation)._

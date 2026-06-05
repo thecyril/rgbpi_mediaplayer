@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ipaddress
 import hashlib
 import json
@@ -16,6 +17,7 @@ from dvdplayer_python.core.debuglog import log_event
 
 
 CONFIG_FILE_NAME = "network_sources.json"
+CRED_KEY_FILE_NAME = "credentials.key"
 SMB_LS_RE = re.compile(r"^\s*(?P<name>.+?)\s+(?P<attrs>[A-Z]+)\s+(?P<size>\d+)\s+\w{3}\s+\w{3}\s+.+$")
 
 
@@ -57,15 +59,103 @@ class NetworkBackend:
         self.config_path = app_dir / CONFIG_FILE_NAME
         self.mount_root = app_dir / "state" / "network_mounts"
         self.mount_root.mkdir(parents=True, exist_ok=True)
+        # Per-install key for at-rest password obfuscation. Lives in the
+        # gitignored state/ dir, owner-read-only.
+        self._key = self._load_or_create_key()
+        self._legacy_plaintext = False
         self.config = self._load()
+        if self._legacy_plaintext:
+            # Upgrade an existing plaintext file to the obfuscated form in place.
+            self._save()
+
+    # -- password obfuscation -------------------------------------------------
+    # NOTE: this is *obfuscation*, not encryption. The player must reconnect to
+    # SMB unattended, so the key has to live on the Pi next to the data — anyone
+    # with root/SD-card access can still recover the password. The goal is only
+    # to keep the password out of plain sight (screenshots, casual `cat`, a
+    # shared/leaked file) and never human-readable on disk. In memory, and to
+    # the rest of the code, passwords are always plaintext; the encode/decode
+    # happens purely at the disk boundary.
+
+    def _load_or_create_key(self) -> bytes:
+        key_path = self.app_dir / "state" / CRED_KEY_FILE_NAME
+        try:
+            if key_path.is_file():
+                raw = base64.b64decode(key_path.read_text(encoding="utf-8").strip())
+                if len(raw) >= 16:
+                    return raw
+        except Exception:
+            pass
+        key = os.urandom(32)
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            key_path.write_text(base64.b64encode(key).decode("ascii"), encoding="utf-8")
+            os.chmod(key_path, 0o600)
+        except Exception as exc:
+            log_event("cred_key_write_failed", error=str(exc))
+        return key
+
+    def _obfuscate(self, plain: Optional[str]) -> Optional[str]:
+        if not plain:
+            return plain
+        raw = plain.encode("utf-8")
+        xored = bytes(b ^ self._key[i % len(self._key)] for i, b in enumerate(raw))
+        return base64.b64encode(xored).decode("ascii")
+
+    def _deobfuscate(self, token: Optional[str]) -> Optional[str]:
+        if not token:
+            return token
+        try:
+            xored = base64.b64decode(token.encode("ascii"))
+            raw = bytes(b ^ self._key[i % len(self._key)] for i, b in enumerate(xored))
+            return raw.decode("utf-8")
+        except Exception:
+            # Lost/rotated key or a legacy plaintext slip-through: hand it back
+            # as-is rather than crashing. Worst case the user re-enters it.
+            return token
+
+    @staticmethod
+    def _password_fields(entries) -> list:
+        return [e for e in entries if isinstance(e, dict) and e.get("password")]
 
     def _load(self) -> dict:
-        if self.config_path.is_file():
-            return json.loads(self.config_path.read_text(encoding="utf-8"))
-        return {"roots": [], "credentials": []}
+        if not self.config_path.is_file():
+            return {"roots": [], "credentials": []}
+        try:
+            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log_event("network_config_load_failed", error=str(exc))
+            return {"roots": [], "credentials": []}
+        raw.setdefault("roots", [])
+        raw.setdefault("credentials", [])
+        if raw.get("obfuscated"):
+            for entry in self._password_fields(raw["roots"]) + self._password_fields(raw["credentials"]):
+                entry["password"] = self._deobfuscate(entry["password"])
+        else:
+            # No flag → this is a legacy plaintext file. Flag it so __init__
+            # rewrites it obfuscated.
+            self._legacy_plaintext = bool(
+                self._password_fields(raw["roots"]) or self._password_fields(raw["credentials"])
+            )
+        raw.pop("obfuscated", None)
+        return raw
 
     def _save(self) -> None:
-        self.config_path.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
+        disk = {
+            "obfuscated": True,
+            "roots": [self._encode_secrets(dict(r)) for r in self.config.get("roots", [])],
+            "credentials": [self._encode_secrets(dict(c)) for c in self.config.get("credentials", [])],
+        }
+        self.config_path.write_text(json.dumps(disk, indent=2), encoding="utf-8")
+        try:
+            os.chmod(self.config_path, 0o600)
+        except OSError as exc:
+            log_event("network_config_chmod_failed", error=str(exc))
+
+    def _encode_secrets(self, entry: dict) -> dict:
+        if entry.get("password"):
+            entry["password"] = self._obfuscate(entry["password"])
+        return entry
 
     def list_saved_roots(self) -> List[SavedNetworkRoot]:
         return [SavedNetworkRoot(**item) for item in self.config.get("roots", [])]
