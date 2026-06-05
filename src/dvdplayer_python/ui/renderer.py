@@ -101,7 +101,21 @@ class Renderer:
 
         self.draw_panel(SAFE_X, CONTENT_Y, SAFE_W, CONTENT_H)
         y = CONTENT_Y + 8
-        for i, (title, subtitle, _active) in enumerate(model.rows[:6]):
+        # Show a 6-row window. Screens that already window their own list
+        # (LIST, DVD picker) pass <=6 rows with a relative `selected`, so
+        # win_start stays 0 and nothing changes. Screens that pass the full
+        # list with an absolute `selected` (e.g. the 7-row keyboard) scroll
+        # minimally so the selected row — and DONE — stay visible.
+        visible = 6
+        total = len(model.rows)
+        sel = model.selected
+        if total > visible and sel >= visible:
+            win_start = min(sel - visible + 1, total - visible)
+        else:
+            win_start = 0
+        window = model.rows[win_start : win_start + visible]
+        for offset, (title, subtitle, _active) in enumerate(window):
+            i = win_start + offset
             selected = i == model.selected
             fill = THEME_ROW_ACTIVE if selected else THEME_ROW
             self.draw_panel(ROW_X, y, ROW_W, ROW_H, fill=fill, border=THEME_BORDER)

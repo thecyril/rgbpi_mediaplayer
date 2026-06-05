@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 
 from dvdplayer_python.core.debuglog import log_event
 
+from dvdplayer_python.core.debuglog import log_event
+
 
 CONFIG_FILE_NAME = "network_sources.json"
 SMB_LS_RE = re.compile(r"^\s*(?P<name>.+?)\s+(?P<attrs>[A-Z]+)\s+(?P<size>\d+)\s+\w{3}\s+\w{3}\s+.+$")
@@ -145,8 +147,19 @@ class NetworkBackend:
         pwd = password or ""
         cmd = ["smbclient", "-g", "-L", f"//{host}", "-U", f"{user}%{pwd}"]
         try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
-        except Exception:
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+        except FileNotFoundError:
+            # smbclient not installed — the #1 cause of a silent "no shares".
+            log_event("smb_list_failed", host=host, error="smbclient not installed (apt install smbclient)")
+            return []
+        except subprocess.CalledProcessError as exc:
+            # auth failure / wrong protocol / unreachable — surface the real
+            # smbclient message in the log instead of swallowing it.
+            tail = (exc.output or "").strip().splitlines()[-1:] if exc.output else []
+            log_event("smb_list_failed", host=host, rc=exc.returncode, error="; ".join(tail) or "smbclient error")
+            return []
+        except Exception as exc:
+            log_event("smb_list_failed", host=host, error=str(exc))
             return []
         entries: List[BrowseEntry] = []
         for line in out.splitlines():
