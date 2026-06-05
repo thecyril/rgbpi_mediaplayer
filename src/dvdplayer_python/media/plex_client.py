@@ -169,7 +169,9 @@ class PlexClient:
             title = node.attrib.get("title", "")
             if not key or not title:
                 continue
-            out.append(PlexNode(title=title, key=f"/library/sections/{key}/all", subtitle=node.attrib.get("type", "library"), kind="section"))
+            # Use the /folder endpoint (not /all) so the on-disk directory
+            # structure is preserved instead of a flat dump of every file.
+            out.append(PlexNode(title=title, key=f"/library/sections/{key}/folder", subtitle=node.attrib.get("type", "library"), kind="section"))
         self.cache["sections"] = [asdict(item) for item in out]
         self._save_cache()
         return out

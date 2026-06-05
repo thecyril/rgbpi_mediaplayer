@@ -33,6 +33,7 @@ from dvdplayer_python.core.models import (
     app_dir,
 )
 from dvdplayer_python.core.persistence import PlaybackStateStore, cleanup_stale_runtime_files
+from dvdplayer_python.media.dvd_titles import probe_dvd_titles
 from dvdplayer_python.media.network_backend import NetworkBackend, make_saved_root
 from dvdplayer_python.media.plex_client import PlexClient
 from dvdplayer_python.media.scanner import scan_dvd_candidates, scan_local_items
@@ -182,6 +183,10 @@ class App:
         self.list_selected = 0
         self.dvd_candidates: list[DvdCandidate] = []
         self.dvd_selected = 0
+        # DVD TITLES picker: the source whose titles we're listing, and the
+        # browser nav snapshot to restore on BACK.
+        self._pending_dvd_source: Optional[PlaybackSource] = None
+        self._pending_dvd_nav: Optional[dict] = None
         self.playback: Optional[PlaybackSession] = None
         self.playback_source: Optional[PlaybackSource] = None
         self.return_screen_after_playback: Optional[Screen] = None
@@ -897,7 +902,7 @@ class App:
         elif action == Action.ACCEPT:
             candidate = self.dvd_candidates[self.dvd_selected]
             log_event("dvd_accept", selected=self.dvd_selected, title=candidate.title)
-            self.start_playback(candidate.source)
+            self.open_dvd_title_picker(candidate.source)
 
     def handle_confirm_action(self, action: Action):
         if not self.confirm_options:
@@ -1942,11 +1947,66 @@ class App:
             return
         if len(self.dvd_candidates) == 1:
             log_event("play_dvd_single", title=self.dvd_candidates[0].title)
-            self.start_playback(self.dvd_candidates[0].source)
+            self.open_dvd_title_picker(self.dvd_candidates[0].source)
             return
         self.set_screen(Screen.DVD_PICKER, "PLAY DVD")
         self.dvd_selected = 0
         log_event("play_dvd_picker", count=len(self.dvd_candidates))
+
+    # -- DVD title picker -----------------------------------------------------
+    # mpv 0.32 can't drive DVD menus, so rather than launch into a dead menu we
+    # enumerate the disc's titles (lsdvd) and let the user pick one.
+    DVD_TITLE_MIN_SECONDS = 10.0  # hide sub-10s menu/transition PGCs
+
+    def open_dvd_title_picker(self, source: PlaybackSource):
+        self._pending_dvd_source = source
+        # If we came from a browser list, remember it so BACK returns there.
+        self._pending_dvd_nav = self._make_nav_snapshot() if self.screen == Screen.LIST else None
+        self._start_busy("probe_dvd", "READING DVD", Screen.LIST, "DVD TITLES")
+        threading.Thread(target=self._probe_dvd_worker, args=(source,), daemon=True).start()
+
+    def _probe_dvd_worker(self, source: PlaybackSource):
+        try:
+            titles = probe_dvd_titles(source.uri)
+            self.background_queue.put(("dvd_titles_done", source, titles, None))
+        except Exception as exc:
+            self.background_queue.put(("dvd_titles_done", source, None, str(exc)))
+
+    def _finish_dvd_titles(self, source: PlaybackSource, titles, error: Optional[str]):
+        self._clear_busy()
+        titles = titles or []
+        if error or not titles:
+            # Couldn't read the structure (no lsdvd, encrypted, odd disc) —
+            # fall back to playing the disc straight rather than dead-ending.
+            log_event("dvd_titles_unavailable", error=error, count=len(titles))
+            self.start_playback(source)
+            return
+        # Hide tiny menu/transition PGCs, but never filter the list empty.
+        shown = [t for t in titles if t.length_seconds >= self.DVD_TITLE_MIN_SECONDS] or titles
+        longest = max(shown, key=lambda t: t.length_seconds)
+        self._push_nav_snapshot(self._pending_dvd_nav)
+        self._pending_dvd_nav = None
+        items: list[ListItem] = []
+        selected = 0
+        for i, t in enumerate(shown):  # disc order preserves episode/short ordering
+            if t.index == longest.index:
+                selected = i
+                subtitle = f"{fmt_duration(t.length_seconds)}  ★ MAIN FEATURE"
+            else:
+                subtitle = fmt_duration(t.length_seconds)
+            items.append(
+                ListItem(
+                    title=f"TITLE {t.index:02d}",
+                    subtitle=subtitle,
+                    kind="dvd_title",
+                    payload={"title_index": t.index, "length": t.length_seconds},
+                )
+            )
+        self.list_items = items
+        self.list_selected = selected
+        self.set_screen(Screen.LIST, "DVD TITLES")
+        self._log_list_selection()
+        log_event("dvd_titles_listed", count=len(items), longest=longest.index, source=source.title)
 
     def open_settings_menu(self):
         self.list_items = self._settings_items()
@@ -2315,6 +2375,8 @@ class App:
                 self._finish_network_browse(payload, result, error)
             elif event == "youtube_resolve_done":
                 self._finish_youtube_resolve(payload, result, error)
+            elif event == "dvd_titles_done":
+                self._finish_dvd_titles(payload, result, error)
 
     def _finish_network_scan(self, payload, hosts, error: Optional[str]):
         if isinstance(payload, dict):
@@ -2574,7 +2636,7 @@ class App:
 
         if item.kind in {"dvd_folder", "iso"} and item.path:
             p = Path(item.path)
-            self.start_playback(
+            self.open_dvd_title_picker(
                 PlaybackSource(
                     title=p.name,
                     kind=PlaybackKind.DVD_ISO if item.kind == "iso" else PlaybackKind.DVD_FOLDER,
@@ -2585,6 +2647,23 @@ class App:
                     container="iso" if item.kind == "iso" else "dvd",
                 )
             )
+            return
+
+        if item.kind == "dvd_title":
+            source = self._pending_dvd_source
+            if not source:
+                self.message = MessageBox("DVD", "No DVD loaded")
+                return
+            title_index = int(item.payload.get("title_index", 1))
+            length = item.payload.get("length")
+            title_source = replace(
+                source,
+                dvd_title=title_index,
+                title=f"{source.title} — TITLE {title_index:02d}",
+                subtitle=fmt_duration(length) if length else source.subtitle,
+            )
+            log_event("dvd_title_selected", title_index=title_index, source=source.title)
+            self.start_playback(title_source)
             return
 
         if item.kind == "network_add":
@@ -2987,6 +3066,8 @@ class App:
                 footer = "A OPEN   X SAVE FAV   B BACK"
             elif any(item.kind == "network_root" for item in self.list_items):
                 footer = "A OPEN   X FORGET   B BACK"
+            elif self.section == "DVD TITLES":
+                footer = "A PLAY TITLE   B BACK"
             selected = visible_selected
 
         model = RenderModel(
