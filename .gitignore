@@ -8,3 +8,6 @@ node_modules/
 state/
 *.log
 .DS_Store
+
+# Local SMB/NFS credentials — must never be committed (contains passwords)
+network_sources.json
