@@ -14,8 +14,6 @@ from typing import List, Optional, Tuple
 
 from dvdplayer_python.core.debuglog import log_event
 
-from dvdplayer_python.core.debuglog import log_event
-
 
 CONFIG_FILE_NAME = "network_sources.json"
 SMB_LS_RE = re.compile(r"^\s*(?P<name>.+?)\s+(?P<attrs>[A-Z]+)\s+(?P<size>\d+)\s+\w{3}\s+\w{3}\s+.+$")
@@ -79,6 +77,15 @@ class NetworkBackend:
         roots.append(asdict(root))
         roots.sort(key=lambda r: r.get("display_name", "").lower())
         self._save()
+
+    def remove_root(self, root_id: str) -> bool:
+        roots = self.config.setdefault("roots", [])
+        remaining = [r for r in roots if r.get("id") != root_id]
+        if len(remaining) == len(roots):
+            return False
+        self.config["roots"] = remaining
+        self._save()
+        return True
 
     def has_root(
         self,

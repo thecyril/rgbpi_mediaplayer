@@ -249,6 +249,40 @@ and 480p content. We reverted to the upstream behaviour. Likely culprits:
 
 ---
 
+## SMB connection persistence + network BACK navigation
+
+Two related fixes to the **BROWSER → NETWORK** flow (`main.py`, `media/network_backend.py`):
+
+- **Connections persist.** The first time you open an SMB share, a
+  `SavedNetworkRoot` is auto-saved to `network_sources.json` (host + share +
+  path `/` + the credentials you logged in with). On the next launch it shows
+  directly under **NETWORK** — tap it and the player re-browses with the stored
+  credentials, **no subnet scan**. Implemented in `_maybe_autosave_network_root()`,
+  fired from `_finish_network_browse()` only for a share-root entry (`kind ==
+  "entry"`, `path == "/"`); deeper folders are navigation, not connections, so
+  they don't add clutter. `add_root()` dedups by id, so re-visiting a share is a
+  no-op.
+- **BACK goes up one level, not to the home menu.** The network browser now
+  feeds the existing `_push_list_nav()` stack (PR #7). Because the descent is
+  async (busy screen + worker thread) with an auth popup in the middle, the
+  parent snapshot is captured *before* leaving the list (`_make_nav_snapshot()`),
+  carried through the browse payload / confirm-popup / keyboard, and committed to
+  the stack only when the child level loads (`_push_nav_snapshot()`). So
+  `folder → share → host list → ADD NETWORK → NETWORK → BROWSER → home` each pop
+  one step.
+- The **NETWORK home** level is rebuilt live on BACK (snapshot tagged
+  `rebuild: "network_home"`) instead of restored from a stale snapshot, so a
+  share you just auto-saved (or a root you just forgot) appears immediately
+  without a relaunch.
+- **X** is context-sensitive on the list: on a saved `network_root` it **forgets**
+  the connection (`remove_root()`); on a `network_entry` folder it still pins a
+  favourite. Footer hints reflect this (`A OPEN  X FORGET  B BACK` vs
+  `… X SAVE FAV …`).
+
+Credentials note: the stored root embeds the SMB username/password in
+`network_sources.json` (plaintext, same as the pre-existing `credentials` block —
+this is a single-user living-room appliance). Guest shares save with no creds.
+
 ## Hardware-specific patches kept outside of git
 
 Some setup steps had to be done in-place on the Pi (no Python code involved). They are not in the repo but are mandatory for the player to run on this hardware:
@@ -288,7 +322,7 @@ These are not changes to the code, but they are why the code looks the way it do
 
 ## Open follow-ups
 
-- Extend the `_push_list_nav()` calls (PR #7) to the **network browser** (SMB) and the **local file browser** (`browser_local`). Same pattern, ~3 extra lines. Would be a one-line follow-up PR.
+- ~~Extend the `_push_list_nav()` calls (PR #7) to the **network browser** (SMB)~~ — **done** (see *SMB connection persistence* below). Still pending for the **local file browser** (`browser_local`), though that one uses explicit `..`/parent entries so it's lower priority.
 - Plumb `--demuxer-max-bytes` / `--demuxer-readahead-secs` from env vars (`DVDPLAYER_MPV_CACHE_SIZE`, `DVDPLAYER_MPV_READAHEAD_SECS`) for users who want to tune them without editing source.
 - Investigate the `--vo=drm` jitter further on `720x480i@60` mode — once PR #5 is merged the `mpv/vo` thread is the only single-thread bottleneck left. A profile run with `perf top` against the running mpv would tell whether it's pixel-format conversion or actual scanout.
 - The Plex token written to `plex_state.json` after PIN linking is sometimes scoped to a stale `machineIdentifier`. Add an idempotent migration step that, when the token works but `server_uri` is unreachable, asks Plex.tv `/api/v2/resources` for a fresh URI for the current `machineIdentifier`.
@@ -301,4 +335,4 @@ The maintainer accepted [PR #1](https://github.com/joeblack2k/rgbpi_mediaplayer/
 
 ---
 
-_Last updated: 29 mai 2026 (optical 5.1 audio output + right-stick volume; SUB SIZE; HUD aspect fix)._
+_Last updated: 5 juin 2026 (SMB connection persistence + network BACK navigation; X-to-forget)._
