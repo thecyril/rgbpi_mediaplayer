@@ -9,6 +9,7 @@ import subprocess
 import fcntl
 import struct
 import threading
+import unicodedata
 from glob import glob
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -253,6 +254,9 @@ class App:
         self._js_pending_combo_button: Optional[int] = None
         self._js_pending_combo_at = 0.0
         self._last_volume_repeat = 0.0
+        # Held-to-repeat menu scrolling. Keyed by (axis, is_negative) → (held
+        # since, last repeat time). See _tick_nav_repeat.
+        self._nav_hold: dict[tuple[int, bool], tuple[float, float]] = {}
 
         self.local_roots = [Path(p) for p in ROOT_BROWSE_PATHS if Path(p).is_dir()]
         self._start_joystick_listener()
@@ -610,6 +614,7 @@ class App:
 
     def _tick(self):
         now = time.time()
+        self._tick_nav_repeat(now)
         self.youtube.tick(now)
         self._tick_background_work(now)
         self._tick_plex_link(now)
@@ -637,6 +642,39 @@ class App:
                         hud.tick(now)
                     except Exception:
                         pass
+
+    def _tick_nav_repeat(self, now: float) -> None:
+        """Held-to-repeat UP/DOWN so holding the stick scrolls a menu.
+
+        The joystick reader fires the first step on the axis edge; here we
+        re-fire it while the axis stays held (after an initial delay). Only
+        active in menus — during playback the sticks have other roles.
+        """
+        if self.playback is not None:
+            if self._nav_hold:
+                self._nav_hold.clear()
+            return
+        for axis in _NAV_REPEAT_AXES:
+            pair = _map_joystick_axis(axis)
+            if not pair:
+                continue
+            neg_action, pos_action = pair
+            neg, pos = self._js_axis_state.get(axis, (False, False))
+            for is_neg, active, action in ((True, neg, neg_action), (False, pos, pos_action)):
+                key = (axis, is_neg)
+                if not active:
+                    self._nav_hold.pop(key, None)
+                    continue
+                held = self._nav_hold.get(key)
+                if held is None:
+                    # First frame held: the reader already issued the initial
+                    # press, so just start the timers (no immediate repeat).
+                    self._nav_hold[key] = (now, now)
+                    continue
+                since, last = held
+                if now - since >= NAV_REPEAT_DELAY and now - last >= NAV_REPEAT_INTERVAL:
+                    self.dispatch(action, source="js_repeat")
+                    self._nav_hold[key] = (since, now)
 
     def _hud(self):
         """Return the playback HUD if available, else ``None``.
@@ -799,6 +837,8 @@ class App:
             item = self.list_items[self.list_selected]
             if self._adjust_switchable_setting(item, action):
                 return
+        elif action in {Action.PREV_LETTER, Action.NEXT_LETTER} and self.list_items:
+            self._jump_letter(-1 if action == Action.PREV_LETTER else 1)
         elif action == Action.X and self.list_items:
             self._handle_list_x_action()
         elif action == Action.SELECT and self.plex_toggle_key:
@@ -816,6 +856,59 @@ class App:
                 return
             log_event("list_accept", selected=self.list_selected, title=item.title, kind=item.kind, path=item.path, via=action.value)
             self.activate_list_item(item)
+
+    @staticmethod
+    def _sort_letter(title: str) -> str:
+        """First sort character of a title, accents folded, digits → '#'.
+
+        Used by the LB/RB letter jump so "Été" groups under E and "2019"
+        groups under '#'.
+        """
+        text = unicodedata.normalize("NFKD", str(title or "")).encode("ascii", "ignore").decode()
+        for ch in text:
+            if ch.isalpha():
+                return ch.upper()
+            if ch.isdigit():
+                return "#"
+        return "?"
+
+    def _jump_letter(self, step: int) -> None:
+        """LB/RB: jump to the first item of the adjacent letter group.
+
+        RB (step=+1) → first item of the next letter. LB (step=-1) → first
+        item of the current letter, or the previous letter's first item when
+        already at the top of the current group (so B→A in the example).
+        """
+        items = self.list_items
+        if not items:
+            return
+        idx = self.list_selected
+        letters = [self._sort_letter(it.title) for it in items]
+        cur = letters[idx]
+        if step > 0:
+            target = next((i for i in range(idx + 1, len(items)) if letters[i] != cur), None)
+        else:
+            # First index of the current letter group.
+            group_start = idx
+            while group_start > 0 and letters[group_start - 1] == cur:
+                group_start -= 1
+            if idx > group_start:
+                target = group_start
+            else:
+                # Already at the top of this group: drop into the previous one
+                # and walk back to its first item.
+                prev = group_start - 1
+                if prev < 0:
+                    target = None
+                else:
+                    prev_letter = letters[prev]
+                    while prev > 0 and letters[prev - 1] == prev_letter:
+                        prev -= 1
+                    target = prev
+        if target is None or target == idx:
+            return
+        self.list_selected = target
+        self._log_list_selection()
 
     def _make_nav_snapshot(self) -> dict:
         """Capture the current list level so it can be restored by BACK later.
@@ -2634,8 +2727,8 @@ class App:
             self.cycle_volume_normalization()
             return
 
-        if item.kind == "settings_force_43":
-            self.toggle_force_43()
+        if item.kind == "settings_aspect_mode":
+            self.cycle_aspect_mode()
             return
 
         if item.kind == "settings_reset_plex_link":
@@ -3394,14 +3487,27 @@ class App:
         self.message = MessageBox("SETTINGS", f"VOLUME {self._volume_normalization_label(next_mode)}")
         log_event("settings_volume_normalization", value=next_mode)
 
-    def toggle_force_43(self):
-        next_value = not bool(self.playback_state.prefs.force_43)
-        self.playback_state.prefs.force_43 = next_value
+    ASPECT_MODE_ORDER = ["off", "stretch", "zoom"]
+
+    def _current_aspect_mode(self) -> str:
+        mode = str(getattr(self.playback_state.prefs, "aspect_mode", "off") or "off").lower()
+        return mode if mode in self.ASPECT_MODE_ORDER else "off"
+
+    def _set_aspect_mode(self, mode: str, via: str) -> None:
+        self.playback_state.prefs.aspect_mode = mode
+        # Keep the legacy bool in sync for any code/downgrade that still reads it.
+        self.playback_state.prefs.force_43 = mode == "stretch"
         self.playback_state.write_prefs()
-        self.status_line = f"Force 4:3 {'ON' if next_value else 'OFF'}"
         self._refresh_settings_items()
-        self.message = MessageBox("SETTINGS", f"FORCE 4:3 {'ON' if next_value else 'OFF'}")
-        log_event("settings_force_43", enabled=next_value)
+        label = self._aspect_mode_label(mode)
+        self.status_line = f"4:3 mode {label}"
+        self.message = MessageBox("SETTINGS", f"4:3 MODE {label}")
+        log_event("settings_aspect_mode", mode=mode, via=via)
+
+    def cycle_aspect_mode(self, step: int = 1, via: str = "accept"):
+        order = self.ASPECT_MODE_ORDER
+        idx = order.index(self._current_aspect_mode())
+        self._set_aspect_mode(order[(idx + step) % len(order)], via=via)
 
     def toggle_deinterlace_mode(self):
         current = str(self.playback_state.prefs.deinterlace_mode or "weave").lower()
@@ -3486,8 +3592,13 @@ class App:
     def _default_mode_subtitle(self) -> str:
         return self._default_mode_label(self.playback_state.prefs.default_mode)
 
-    def _force_43_subtitle(self) -> str:
-        return "ON" if self.playback_state.prefs.force_43 else "OFF"
+    def _aspect_mode_label(self, value: str) -> str:
+        return {"off": "OFF", "stretch": "STRETCH", "zoom": "ZOOM (CROP)"}.get(
+            str(value).lower(), "OFF"
+        )
+
+    def _aspect_mode_subtitle(self) -> str:
+        return self._aspect_mode_label(self._current_aspect_mode())
 
     def _pal_speedup_subtitle(self) -> str:
         return "ON (+4% audio)" if bool(getattr(self.playback_state.prefs, "pal_speedup", True)) else "OFF"
@@ -3519,10 +3630,11 @@ class App:
             "settings_crt_motion",
             "settings_default_mode",
             "settings_volume_normalization",
-            "settings_force_43",
+            "settings_aspect_mode",
             "settings_pal_speedup",
             "settings_ntsc_speedup",
             "settings_audio_output",
+            "settings_deinterlace_mode",
         }
 
     def _is_switchable_setting_item(self, item: ListItem) -> bool:
@@ -3592,17 +3704,26 @@ class App:
             self.message = MessageBox("SETTINGS", f"VOLUME {self._volume_normalization_label(next_mode)}")
             log_event("settings_volume_normalization", value=next_mode, via=action.value)
             return True
-        if item.kind == "settings_force_43":
-            next_value = action == Action.RIGHT
-            self.playback_state.prefs.force_43 = next_value
+        if item.kind == "settings_aspect_mode":
+            self.cycle_aspect_mode(step, via=action.value)
+            return True
+        if item.kind == "settings_deinterlace_mode":
+            order = ["weave", "bob"]
+            current = self._deinterlace_label(self.playback_state.prefs.deinterlace_mode).lower()
+            try:
+                idx = order.index(current)
+            except ValueError:
+                idx = 0
+            next_mode = order[(idx + step) % len(order)]
+            self.playback_state.prefs.deinterlace_mode = next_mode
             self.playback_state.write_prefs()
             self._refresh_settings_items()
-            self.status_line = f"Force 4:3 {'ON' if next_value else 'OFF'}"
-            self.message = MessageBox("SETTINGS", f"FORCE 4:3 {'ON' if next_value else 'OFF'}")
-            log_event("settings_force_43", enabled=next_value, via=action.value)
+            self.status_line = f"Deinterlace {self._deinterlace_label(next_mode)}"
+            self.message = MessageBox("SETTINGS", f"DEINTERLACE {self._deinterlace_label(next_mode)}")
+            log_event("settings_deinterlace_mode", mode=next_mode, via=action.value)
             return True
         if item.kind == "settings_pal_speedup":
-            # Toggle bool. Same LEFT=OFF/RIGHT=ON pattern as settings_force_43
+            # Toggle bool. Same LEFT=OFF/RIGHT=ON pattern as the other booleans
             # so the user's mental model stays consistent across the menu.
             next_value = action == Action.RIGHT
             self.playback_state.prefs.pal_speedup = next_value
@@ -3674,9 +3795,14 @@ class App:
                 kind="settings_audio_output",
             ),
             ListItem(
-                title="FORCE 4:3",
-                subtitle=self._force_43_subtitle(),
-                kind="settings_force_43",
+                title="4:3 MODE",
+                subtitle=self._aspect_mode_subtitle(),
+                kind="settings_aspect_mode",
+            ),
+            ListItem(
+                title="DEINTERLACE",
+                subtitle=self._deinterlace_subtitle(),
+                kind="settings_deinterlace_mode",
             ),
             ListItem(
                 title="RESET PLEX LINK",
@@ -3760,6 +3886,8 @@ def _map_key(key: int) -> Optional[Action]:
         pygame.K_x: Action.X,
         pygame.K_h: Action.HOME,
         pygame.K_q: Action.QUIT,
+        pygame.K_PAGEUP: Action.PREV_LETTER,
+        pygame.K_PAGEDOWN: Action.NEXT_LETTER,
     }
     return mapping.get(key)
 
@@ -3769,6 +3897,8 @@ def _map_joystick_button(number: int) -> Optional[Action]:
         0: Action.ACCEPT,  # A
         1: Action.BACK,  # B
         2: Action.X,  # X
+        4: Action.PREV_LETTER,  # LB / L1
+        5: Action.NEXT_LETTER,  # RB / R1
         6: Action.SELECT,  # Back
         7: Action.START,  # Start
         8: Action.HOME,  # Guide
@@ -3792,6 +3922,14 @@ def _map_joystick_axis(number: int) -> Optional[tuple[Action, Action]]:
 # Right-stick Y axis number (held-to-repeat volume). Override with
 # DVDPLAYER_VOLUME_AXIS if the controller maps the right stick elsewhere.
 _VOLUME_AXIS = int(os.environ.get("DVDPLAYER_VOLUME_AXIS", "4") or "4")
+
+# Vertical axes that auto-repeat UP/DOWN while held (left stick Y + dpad Y),
+# so holding the stick scrolls a menu continuously. Each maps to (UP, DOWN).
+_NAV_REPEAT_AXES = (1, 7)
+# Hold this long before repeats start (lets a quick tap move exactly one row),
+# then fire a step every interval (~11 rows/s).
+NAV_REPEAT_DELAY = 0.35
+NAV_REPEAT_INTERVAL = 0.09
 
 
 def _now_ms() -> int:

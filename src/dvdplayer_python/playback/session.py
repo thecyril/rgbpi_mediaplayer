@@ -46,6 +46,17 @@ _FFMPEG_FILTER_SUPPORT_CACHE: dict[str, bool] = {}
 # so the speedup fires for Plex sources where source.hint_fps is None (the
 # routing probes the fps but hint_fps stays empty → speedup was silently skipped).
 _VIDEO_FPS_CACHE: dict[str, float] = {}
+# Per-URI interlaced flag (from ffprobe field_order), filled by _probe_video_info
+# during output-mode routing so the decode-path choice in _spawn_mpv can reuse it
+# without a second probe. True = interlaced (needs software bwdif), False =
+# progressive (eligible for the zero-copy hardware overlay path).
+_VIDEO_INTERLACED_CACHE: dict[str, bool] = {}
+# ffprobe field_order values that mean the stream is interlaced.
+_INTERLACED_FIELD_ORDERS = {"tt", "bb", "tb", "bt", "tff", "bff", "interlaced"}
+
+
+def _field_order_is_interlaced(field_order: object) -> bool:
+    return str(field_order or "").strip().lower() in _INTERLACED_FIELD_ORDERS
 
 
 def _which(binary: str) -> Optional[str]:
@@ -632,6 +643,8 @@ def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
                 continue
             if fps:
                 _VIDEO_FPS_CACHE[str(uri)] = float(fps)
+            if field_order is not None:
+                _VIDEO_INTERLACED_CACHE[str(uri)] = _field_order_is_interlaced(field_order)
             return VideoProbeInfo(width=width, height=height, fps=fps, field_order=str(field_order) if field_order else None)
         except Exception:
             continue
@@ -970,12 +983,21 @@ def playback_profile_for_source(source: PlaybackSource, prefs: Optional[Playback
     )
 
 
-def force_43_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> bool:
+def aspect_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> str:
+    """Resolve the 4:3 handling for this source: "off", "stretch" or "zoom".
+
+    Authored DVDs and non-video sources always render native (the override
+    only makes sense for plain video files / Plex / YouTube clips).
+    """
     if source.authored_dvd:
-        return False
+        return "off"
     if source.kind not in {PlaybackKind.VIDEO_FILE, PlaybackKind.PLEX_VIDEO, PlaybackKind.YOUTUBE_VIDEO}:
-        return False
-    return bool(getattr(prefs, "force_43", False))
+        return "off"
+    mode = str(getattr(prefs, "aspect_mode", "") or "").strip().lower()
+    if mode in {"stretch", "zoom"}:
+        return mode
+    # Legacy fallback for prefs that predate aspect_mode.
+    return "stretch" if bool(getattr(prefs, "force_43", False)) else "off"
 
 
 def audio_normalization_profile_for_source(
@@ -1022,6 +1044,51 @@ def motion_vf_filter_for_source(source: PlaybackSource, prefs: Optional[Playback
     if motion_mode == "cable_smooth":
         return CABLE_SMOOTH_BLEND_FILTER
     return None
+
+
+def _hwdec_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> tuple[str, bool]:
+    """Return ``(mpv_hwdec_value, uses_hw_overlay)`` for this source.
+
+    On the Pi 4 the win for HD-on-CRT is the **zero-copy DRM overlay path**:
+    a non-copy hardware decoder (v4l2m2m for H.264, rpivid/"drm" for HEVC)
+    hands mpv's vo=drm a DRM-PRIME frame, which it puts on a hardware overlay
+    plane. The display block's HVS scaler then downscales it to the CRT mode —
+    so both decode AND scaling run on silicon, and (unlike vo=gpu) it works on
+    interlaced 480i/576i modes. Measured on a 59 Mbit/s 1080p file: VO frame
+    drops fell from ~14/s (software decode + libswscale) to ~1.7/s.
+
+    Interlaced content (DVDs, but also interlaced Plex/broadcast files) stays
+    on software decode ("auto-safe"): it needs the software bwdif deinterlacer,
+    which only runs on RAM frames — incompatible with the overlay path. We
+    detect this from the ffprobe field_order cached during output-mode routing
+    (_VIDEO_INTERLACED_CACHE). SD MPEG-2 / interlaced HD is light enough for
+    software decode + libswscale.
+
+    The second return value flags the overlay path so the caller skips software
+    video filters (bwdif etc.) — those force a readback to RAM and collapse the
+    overlay back to the slow libswscale path.
+
+    DVDPLAYER_MPV_HWDEC overrides the value (e.g. "no" forces software,
+    "auto-copy" forces the copy path). An override is assumed non-overlay
+    unless it is one of the known non-copy methods.
+    """
+    is_dvd = source.authored_dvd or source.kind in {
+        PlaybackKind.DVD_FOLDER,
+        PlaybackKind.DVD_ISO,
+        PlaybackKind.OPTICAL_DRIVE,
+    }
+    # Probed during output-mode routing (runs before this). Default False
+    # (progressive → overlay) when unknown — the common case.
+    interlaced = _VIDEO_INTERLACED_CACHE.get(str(source.uri), False)
+    override = os.environ.get("DVDPLAYER_MPV_HWDEC", "").strip()
+    if override:
+        mode = override
+    elif is_dvd or interlaced:
+        mode = "auto-safe"
+    else:
+        mode = "auto"
+    overlay = mode in {"auto", "v4l2m2m", "drm", "yes"}
+    return mode, overlay
 
 
 class PlaybackSession:
@@ -1266,7 +1333,7 @@ class PlaybackSession:
         prefer_drm: bool,
     ) -> subprocess.Popen:
         profile = playback_profile_for_source(source, prefs)
-        force_43 = force_43_for_source(source, prefs)
+        aspect_mode = aspect_mode_for_source(source, prefs)
         normalization_mode, audio_filter = audio_normalization_profile_for_source(source, prefs)
         deinterlace_mode, deinterlace_filter = deinterlace_profile_for_source(source, prefs)
         smooth_fps_filter = smooth_fps_filter_for_source(source, prefs)
@@ -1276,7 +1343,7 @@ class PlaybackSession:
         video_sync_flag = f"--video-sync={profile.video_sync}"
         monitor_pixel_aspect = _monitor_pixel_aspect_for_mode(target_mode)
 
-        hwdec_mode = os.environ.get("DVDPLAYER_MPV_HWDEC", "auto-safe").strip() or "auto-safe"
+        hwdec_mode, hw_overlay = _hwdec_for_source(source, prefs)
 
         # mpv `--sub-font-size`, `--osd-font-size`, `--sub-margin-y` and
         # `--sub-border-size` are expressed in "scaled pixels at a window
@@ -1344,14 +1411,24 @@ class PlaybackSession:
         # Keep mpv's built-in deinterlace disabled; we apply bwdif explicitly
         # in bob mode to avoid double-processing and heavy frame amplification.
         args.append("--deinterlace=no")
-        if deinterlace_mode == "bob":
+        # bwdif is a software filter: it only works on RAM frames, so applying
+        # it on the hardware-overlay path (hw_overlay) would force mpv to read
+        # frames back from the decoder and lose the overlay (the very thing
+        # that makes HD smooth). Only deinterlace on the software-decode path
+        # (DVDs) — HD video files are progressive anyway.
+        if deinterlace_mode == "bob" and not hw_overlay:
             args.append(f"--vf-add={deinterlace_filter}")
         if smooth_fps_filter:
             args.append(f"--vf-add={smooth_fps_filter}")
         if motion_vf_filter:
             args.append(f"--vf-add={motion_vf_filter}")
-        if force_43:
+        if aspect_mode == "stretch":
+            # Distort non-4:3 content to fill a 4:3 frame (no image lost).
             args.append("--video-aspect-override=4:3")
+        elif aspect_mode == "zoom":
+            # Pan-and-scan: keep proportions, zoom to fill the 4:3 output and
+            # crop the side borders (mpv keepaspect stays on by default).
+            args.append("--panscan=1.0")
         if audio_filter:
             args.append(f"--af={audio_filter}")
         if monitor_pixel_aspect is not None:
@@ -1379,6 +1456,11 @@ class PlaybackSession:
             args.append("--audio-pitch-correction=no")
 
         if prefer_drm and drm_target and target_mode:
+            # vo=drm (software scaling) is the only viable VO here: the CRT runs
+            # interlaced modes (480i/576i) and vo=gpu's atomic KMS path can't
+            # drive interlaced (EINVAL on commit). HD smoothness instead comes
+            # from the hardware decode + DRM overlay plane (see _hwdec_for_source),
+            # which scales on the display block's HVS, not libswscale.
             args += [
                 "--vo=drm",
                 f"--drm-connector={_mpv_drm_connector_value(drm_target)}",
@@ -1390,6 +1472,12 @@ class PlaybackSession:
                 connector=drm_target.connector,
                 mode=drm_target.mode_name,
             )
+
+        # Free-form extra mpv args for debugging without a redeploy
+        # (space-separated), e.g. DVDPLAYER_MPV_EXTRA="--hwdec=no". Empty = no-op.
+        extra_args = os.environ.get("DVDPLAYER_MPV_EXTRA", "").split()
+        if extra_args:
+            args += extra_args
 
         if source.kind in {PlaybackKind.DVD_FOLDER, PlaybackKind.DVD_ISO, PlaybackKind.OPTICAL_DRIVE}:
             args.append(f"--dvd-device={source.uri}")
@@ -1426,7 +1514,7 @@ class PlaybackSession:
             video_sync=profile.video_sync,
             interpolation=profile.interpolation,
             tscale=profile.tscale,
-            force_43=force_43,
+            aspect_mode=aspect_mode,
             volume_normalization=normalization_mode,
             audio_filter=audio_filter,
             deinterlace_mode=deinterlace_mode,
@@ -1442,11 +1530,13 @@ class PlaybackSession:
             cmd=" ".join(args[:28]) + " ...",
             mode=target_mode,
             prefer_drm=prefer_drm,
+            hwdec=hwdec_mode,
+            hw_overlay=hw_overlay,
             video_sync=profile.video_sync,
             interpolation=profile.interpolation == "yes",
             motion_mode=profile.motion_mode,
             monitor_pixel_aspect=monitor_pixel_aspect,
-            force_43=force_43,
+            aspect_mode=aspect_mode,
             volume_normalization=normalization_mode,
             deinterlace_mode=deinterlace_mode,
             smooth_fps_filter=smooth_fps_filter,

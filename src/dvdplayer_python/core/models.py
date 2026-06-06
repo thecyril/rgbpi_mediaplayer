@@ -43,6 +43,9 @@ class Action(str, Enum):
     QUIT = "quit"
     VOLUME_UP = "volume_up"
     VOLUME_DOWN = "volume_down"
+    # LB/RB: jump to the first item of the previous/next letter group.
+    PREV_LETTER = "prev_letter"
+    NEXT_LETTER = "next_letter"
 
 
 class PlaybackKind(str, Enum):
@@ -165,7 +168,13 @@ class PlaybackPrefs:
     preferred_subtitle_language: Optional[str] = None
     motion_mode: str = "smooth_tv"
     default_mode: str = "60hz"
+    # Legacy boolean kept for backward-compat / migration only; aspect_mode is
+    # the source of truth (see _normalize_aspect_mode in persistence).
     force_43: bool = False
+    # 4:3 handling for non-4:3 content: "off" (native), "stretch" (distort to
+    # 4:3 via --video-aspect-override) or "zoom" (pan-and-scan crop via
+    # --panscan=1.0, keeps proportions, cuts the side borders).
+    aspect_mode: str = "off"
     volume_normalization: str = "light"
     deinterlace_mode: str = "weave"
     pal_speedup: bool = True

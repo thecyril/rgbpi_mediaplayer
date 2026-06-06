@@ -35,6 +35,9 @@ class PlaybackStateStore:
                 self.prefs.default_mode = _normalize_default_mode(self.prefs.default_mode)
                 self.prefs.volume_normalization = _normalize_volume_normalization(self.prefs.volume_normalization)
                 self.prefs.deinterlace_mode = _normalize_deinterlace_mode(self.prefs.deinterlace_mode)
+                self.prefs.aspect_mode = _normalize_aspect_mode(self.prefs.aspect_mode, self.prefs.force_43)
+                # Keep the legacy bool consistent so a downgrade still behaves.
+                self.prefs.force_43 = self.prefs.aspect_mode == "stretch"
         if self.last_played_path.is_file():
             raw = json.loads(self.last_played_path.read_text(encoding="utf-8"))
             self.last_played = _decode_last_played(raw)
@@ -73,6 +76,8 @@ class PlaybackStateStore:
         self.prefs.default_mode = _normalize_default_mode(self.prefs.default_mode)
         self.prefs.volume_normalization = _normalize_volume_normalization(self.prefs.volume_normalization)
         self.prefs.deinterlace_mode = _normalize_deinterlace_mode(self.prefs.deinterlace_mode)
+        self.prefs.aspect_mode = _normalize_aspect_mode(self.prefs.aspect_mode, self.prefs.force_43)
+        self.prefs.force_43 = self.prefs.aspect_mode == "stretch"
         self.prefs_path.write_text(json.dumps(asdict(self.prefs), indent=2), encoding="utf-8")
 
     def save_last_played(
@@ -142,6 +147,19 @@ def _normalize_deinterlace_mode(value: object) -> str:
     if text in {"bob", "bwdif", "on", "yes", "1"}:
         return "bob"
     return "weave"
+
+
+def _normalize_aspect_mode(value: object, legacy_force_43: bool = False) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"zoom", "crop", "panscan"}:
+        return "zoom"
+    if text in {"stretch", "fill", "force", "force_43", "4:3", "43"}:
+        return "stretch"
+    if text in {"off", "none", "native", "0", ""}:
+        # No explicit aspect_mode (e.g. prefs written before this setting
+        # existed): fall back to the legacy force_43 boolean = old "stretch".
+        return "stretch" if legacy_force_43 else "off"
+    return "off"
 
 
 def _encode_source(source: PlaybackSource) -> dict:
