@@ -207,12 +207,13 @@ def _resolve_alsa_device() -> str:
 #   - `_UT23_HW`     : the UT23 raw hw device. Carries native AC3/DTS bitstream
 #                      bit-perfect (Q990D detects it via the IEC61937 preambles)
 #                      AND stereo PCM. Its hardware PCM volume MUST stay at 0 dB.
-#   - `_DOLBY51`     : the ALSA `a52` device (defined in /etc/asound.conf) that
-#                      encodes any PCM 5.1 to AC3 on the fly ("Dolby Digital
-#                      Live") and feeds _UT23_HW. Used for FLAC/AAC/PCM
-#                      multichannel that can't be bitstreamed natively.
+#   - non-bitstream MC (FLAC/AAC/PCM 5.1) is encoded to AC3 *inside mpv* with
+#     `--af=lavcac3enc` and bitstreamed to _UT23_IEC958. This replaced the old
+#     ALSA `a52` device (`_DOLBY51`), which emitted metallic/crackly AC3 on HD
+#     content — its real-time encode got preempted by the HD video decode.
 # Only AC3 and DTS *core* survive an optical S/PDIF link; E-AC3, TrueHD and
-# DTS-HD do not (HDMI-only), so they fall back to the dolby51 transcode path.
+# DTS-HD do not (HDMI-only), so they go through the lavcac3enc transcode path.
+# `_DOLBY51` stays defined (Kodi uses it; fallback via DVDPLAYER_DOLBY_DEVICE).
 # ---------------------------------------------------------------------------
 _OPTICAL_PASSTHROUGH_CODECS = {"ac3", "dts"}
 # Raw hw device — for PCM (stereo) and as the dolby51 a52 slave.
@@ -225,6 +226,19 @@ _UT23_HW = os.environ.get("DVDPLAYER_OPTICAL_HW", "").strip() or "hw:CARD=Tx,DEV
 # the device Kodi uses for its passthrough output too.)
 _UT23_IEC958 = os.environ.get("DVDPLAYER_OPTICAL_IEC958", "").strip() or "iec958:CARD=Tx,DEV=0"
 _DOLBY51 = os.environ.get("DVDPLAYER_DOLBY_DEVICE", "").strip() or "dolby51"
+# AC3 transcode for non-bitstream multichannel (FLAC/AAC/PCM 5.1): encode AC3
+# inside mpv with libavcodec (--af=lavcac3enc) and bitstream it to the raw
+# S/PDIF (iec958) device. This REPLACES the ALSA "a52"/dolby51 plugin, which
+# produced metallic/crackly AC3 under CPU load (HD-video decode contended the
+# real-time encode) — libavcodec's encoder is robust where the a52 plugin is
+# not. 640 kbps = the AC3 maximum the Q990D accepts over S/PDIF.
+_AC3_BITRATE = os.environ.get("DVDPLAYER_AC3_BITRATE", "").strip() or "640"
+
+
+def _ac3_transcode_args() -> list[str]:
+    """mpv args for the in-process AC3 transcode (the --af is added later, last
+    in the filter chain, so any volume-normalization filter runs before it)."""
+    return ["--ao=alsa", f"--audio-device=alsa/{_UT23_IEC958}", "--audio-channels=5.1"]
 
 
 def _resolve_audio_output(prefs: Optional[PlaybackPrefs] = None) -> str:
@@ -283,20 +297,20 @@ def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = 
     """Decide the audio strategy + the mpv args that implement it.
 
     Returns ``(mode, args)`` where ``mode`` is one of
-    ``jack`` / ``passthrough`` / ``dolby51`` / ``pcm_stereo`` (for logging),
+    ``jack`` / ``passthrough`` / ``ac3_transcode`` / ``pcm_stereo`` (for logging),
     and ``args`` is the list of mpv flags to append.
 
     Strategy in optical mode (designed to be robust against mid-playback
     audio-track switches — the chosen device stays valid for every track):
       * any multichannel track that ISN'T optical-bitstreamable (FLAC, AAC,
-        E-AC3, TrueHD, PCM 5.1…)  → ``dolby51`` (decode → AC3). Covers
+        E-AC3, TrueHD, PCM 5.1…)  → ``ac3_transcode`` (decode → AC3). Covers
         everything; switching tracks just re-encodes.
       * else if there's a multichannel track and they're ALL AC3/DTS core
         → native passthrough on the UT23 (Q990D shows "DTS"/"Dolby Digital").
         Switching between bitstream tracks stays valid; a stereo track just
         decodes to PCM stereo which the optical link also carries.
       * else (stereo only) → PCM stereo straight to the UT23.
-    Probe failure → dolby51 (safe: handles any channel count).
+    Probe failure → ac3_transcode (safe: handles any channel count).
     """
     if _resolve_audio_output(prefs) == "jack":
         return "jack", [
@@ -311,10 +325,10 @@ def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = 
     has_non_bitstream_mc = any(s["codec"] not in _OPTICAL_PASSTHROUGH_CODECS for s in multichannel)
 
     if not streams:
-        # Unknown — dolby51 is the safe universal path.
-        return "dolby51", ["--ao=alsa", f"--audio-device=alsa/{_DOLBY51}", "--audio-channels=5.1"]
+        # Unknown — AC3 transcode is the safe universal path.
+        return "ac3_transcode", _ac3_transcode_args()
     if has_non_bitstream_mc:
-        return "dolby51", ["--ao=alsa", f"--audio-device=alsa/{_DOLBY51}", "--audio-channels=5.1"]
+        return "ac3_transcode", _ac3_transcode_args()
     if multichannel:
         # iec958 device (not hw) — see _UT23_IEC958: mpv appends AES params
         # for passthrough which only the iec958 plugin accepts.
@@ -1367,7 +1381,7 @@ class PlaybackSession:
         # Audio output: either the bcm2835 jack (stereo, direct hw:0,0 to skip
         # ALSA's poor plug resampler) or the UT23 optical 5.1 path with
         # automatic codec detection (native AC3/DTS passthrough, or AC3
-        # transcode via the dolby51 a52 device). See _audio_output_plan.
+        # transcode via mpv's lavcac3enc to S/PDIF). See _audio_output_plan.
         audio_mode, audio_args = _audio_output_plan(source, prefs)
         args = [
             mpv,
@@ -1431,6 +1445,12 @@ class PlaybackSession:
             args.append("--panscan=1.0")
         if audio_filter:
             args.append(f"--af={audio_filter}")
+        if audio_mode == "ac3_transcode":
+            # Encode AC3 in mpv (libavcodec) — must be the LAST audio filter, so
+            # it runs after any volume-normalization filter above. Bitstreamed
+            # to the raw S/PDIF device; replaces the glitchy ALSA a52 plugin.
+            flag = "--af-add" if audio_filter else "--af"
+            args.append(f"{flag}=lavcac3enc=bitrate={_AC3_BITRATE}")
         if monitor_pixel_aspect is not None:
             args.append(f"--monitorpixelaspect={monitor_pixel_aspect:.7f}")
 

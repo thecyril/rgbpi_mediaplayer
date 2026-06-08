@@ -148,9 +148,17 @@ track switches (no relaunch):
 | Source track(s) | mpv device + flags | Soundbar shows |
 |---|---|---|
 | AC3 / DTS-core multichannel (all bitstream) | `iec958:CARD=Tx` + `--audio-spdif=ac3,dts` | **DTS** / **Dolby Digital** (native) |
-| FLAC / AAC / E-AC3 / PCM 5.1 (any non-bitstream MC) | `dolby51` (ALSA `a52`, software AC3) | **Dolby Digital** |
+| FLAC / AAC / E-AC3 / PCM 5.1 (any non-bitstream MC) | `--af=lavcac3enc=bitrate=640` → `iec958:CARD=Tx` | **Dolby Digital** (encoded in mpv) |
 | stereo only | `hw:CARD=Tx` (PCM) | (stereo) |
-| probe failure | `dolby51` (safe) | **Dolby Digital** |
+| probe failure | `lavcac3enc` (safe) | **Dolby Digital** |
+
+> The non-bitstream path encodes AC3 **inside mpv** with `lavcac3enc`
+> (libavcodec). It used to use the ALSA `a52` plugin (`dolby51` device), but
+> that produced **metallic/crackly AC3 on HD content** — the real-time a52
+> encode got preempted by the HD video decode (mpv `vo` thread ~70% CPU) and
+> emitted corrupt AC3 frames *without* a logged underrun. libavcodec's encoder
+> is robust under load. `dolby51` stays in `/etc/asound.conf` (Kodi uses it,
+> and it's a fallback via `DVDPLAYER_DOLBY_DEVICE`).
 
 The non-obvious bits (full story in the guide, linked below):
 
