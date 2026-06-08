@@ -1786,15 +1786,24 @@ class App:
             video_fps_value = None
             video_fps = "UNKNOWN"
         # If mpv is playing the source at a non-1.0 speed (e.g. PAL speedup
-        # for 23.976 → 25 fps), annotate the effective rate so the user
-        # doesn't think the source fps reported above is what is actually
-        # hitting the display.
+        # for 23.976 → 25 fps), annotate the effective rate so the user doesn't
+        # think the source fps reported above is what is actually hitting the
+        # display.
         try:
             speed_value = float(self._read_playback_property("speed") or 1.0)
         except (TypeError, ValueError):
             speed_value = 1.0
-        if video_fps_value and abs(speed_value - 1.0) > 0.005:
-            video_fps = f"{video_fps:s} (×{speed_value:.4f} → {video_fps_value * speed_value:.3f})"
+        if abs(speed_value - 1.0) > 0.005:
+            # container-fps lies for VFR / telecined sources (24p anime muxed as
+            # 29.97); the speedup was computed from the *real* rate, so use the
+            # measured estimated-vf-fps here — otherwise the effective figure is
+            # nonsense (29.97×1.05→31.5 when the real cadence is 23.976→25).
+            try:
+                real_fps = float(self._read_playback_property("estimated-vf-fps"))
+            except (TypeError, ValueError):
+                real_fps = video_fps_value
+            if real_fps:
+                video_fps = f"{real_fps:.3f} (×{speed_value:.4f} → {real_fps * speed_value:.3f})"
         tv_hz = self._current_tv_hz_label()
         interpolation_type = self._current_interpolation_type()
         audio_out = self._audio_output_status(audio_codec)
