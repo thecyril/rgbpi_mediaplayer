@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import socket
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -14,6 +16,34 @@ import requests
 PLEX_PRODUCT_NAME = "DVD Mediaplayer"
 APP_VERSION = "0.1.0-python"
 PLATFORM_NAME = "Linux"
+
+
+def _local_subnet_prefix() -> Optional[str]:
+    """This host's own LAN /24 prefix (e.g. ``"192.168.1."``), or None.
+
+    Used to prefer the Plex connection on the same subnet as us — the real
+    LAN address — over the server's other (Docker-internal, WAN, relay)
+    addresses, which Plex also advertises as ``local``.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ip.rsplit(".", 1)[0] + "." if ip.count(".") == 3 else None
+    except Exception:
+        return None
+
+
+def _plexdirect_ip(uri: str) -> Optional[str]:
+    """Extract the embedded IP from a plex.direct URI.
+
+    ``https://192-168-1-3.<hash>.plex.direct:32400`` -> ``"192.168.1.3"``.
+    """
+    m = re.search(r"//(\d{1,3}-\d{1,3}-\d{1,3}-\d{1,3})\.", uri)
+    return m.group(1).replace("-", ".") if m else None
 
 
 @dataclass
@@ -155,24 +185,78 @@ class PlexClient:
         if not token:
             return
         response = requests.get(
-            "https://plex.tv/api/resources?includeHttps=1",
+            "https://plex.tv/api/resources?includeHttps=1&includeRelay=1",
             headers=self._headers(token),
             timeout=8,
         )
         response.raise_for_status()
         root = ET.fromstring(response.text)
+        # Collect every server device, owned ones first (your own box beats a
+        # friend's shared server).
+        servers = []  # (owned, name, device_token, [Connection, ...])
         for dev in root.findall("Device"):
             if dev.attrib.get("provides", "").find("server") < 0:
                 continue
-            conn = dev.find("Connection")
-            if conn is None:
+            conns = dev.findall("Connection")
+            if not conns:
                 continue
-            self.state["server_name"] = dev.attrib.get("name", "Plex")
-            self.state["server_uri"] = conn.attrib.get("uri")
-            self.state["server_token"] = token
-            self._save_state()
-            return
-        raise RuntimeError("no Plex server resource found")
+            owned = dev.attrib.get("owned") == "1"
+            dev_token = dev.attrib.get("accessToken") or token  # shared servers carry their own
+            servers.append((owned, dev.attrib.get("name", "Plex"), dev_token, conns))
+        if not servers:
+            raise RuntimeError("no Plex server resource found")
+        servers.sort(key=lambda s: 0 if s[0] else 1)
+        for _owned, name, dev_token, conns in servers:
+            uri = self._pick_reachable_connection(conns, dev_token)
+            if uri:
+                self.state["server_name"] = name
+                self.state["server_uri"] = uri
+                self.state["server_token"] = dev_token
+                self._save_state()
+                return
+        raise RuntimeError("no reachable Plex connection found")
+
+    def _pick_reachable_connection(self, conns, token: str) -> Optional[str]:
+        """Choose the connection that actually answers from THIS host.
+
+        Plex advertises every server-side interface — including Docker bridge
+        networks (172.x) that are unreachable from the LAN — and marks them all
+        ``local=1``, so ordering by the ``local`` flag is useless. Rank by
+        likelihood (same /24 as us > other local > WAN > relay) to probe the
+        best candidate first, then return the first URI that responds. The probe
+        is what guarantees correctness; the ranking only makes it fast.
+        """
+        my_prefix = _local_subnet_prefix()
+
+        def rank(c) -> int:
+            uri = c.attrib.get("uri", "")
+            relay = c.attrib.get("relay") == "1"
+            local = c.attrib.get("local") == "1"
+            ip = _plexdirect_ip(uri)
+            if my_prefix and ip and ip.startswith(my_prefix):
+                return 0  # our own subnet → the real LAN address
+            if local and not relay:
+                return 1
+            if not relay:
+                return 2  # WAN (works, but hairpins out to the internet)
+            return 3  # relay: slow, bandwidth-capped, last resort
+
+        ordered = sorted(conns, key=rank)
+        for c in ordered:
+            uri = c.attrib.get("uri")
+            if uri and self._connection_alive(uri, token):
+                return uri
+        # Nothing answered (e.g. server momentarily down) → keep the best-ranked
+        # URI so a later retry can still reach it.
+        return ordered[0].attrib.get("uri") if ordered else None
+
+    def _connection_alive(self, uri: str, token: str) -> bool:
+        """True if ``{uri}/identity`` answers quickly (reachable from here)."""
+        try:
+            r = requests.get(uri + "/identity", headers=self._headers(token), timeout=2.5)
+            return r.status_code == 200
+        except Exception:
+            return False
 
     def _server_xml(self, path: str) -> str:
         uri = self.state.get("server_uri")
