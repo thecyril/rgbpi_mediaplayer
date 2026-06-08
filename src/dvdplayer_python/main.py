@@ -254,6 +254,10 @@ class App:
         self._js_pending_combo_button: Optional[int] = None
         self._js_pending_combo_at = 0.0
         self._last_volume_repeat = 0.0
+        # Throttle the runtime-state JSON export (a status file for the control
+        # API) so it isn't rewritten 30x/s — that hammers the SD card and steals
+        # scheduler slots from the real-time decode/USB-audio pipeline.
+        self._last_state_write = 0.0
         # Held-to-repeat menu scrolling. Keyed by (axis, is_negative) → (held
         # since, last repeat time). See _tick_nav_repeat.
         self._nav_hold: dict[tuple[int, bool], tuple[float, float]] = {}
@@ -305,8 +309,17 @@ class App:
                 self._pump_control()
                 self._pump_pygame()
                 self._tick()
-                self._draw()
-                self._write_runtime_state()
+                now = time.time()
+                # During playback mpv owns the DRM screen and all overlays are
+                # drawn via mpv's OSD, so the pygame UI render is invisible —
+                # skip it to free CPU for the real-time decode/USB-audio path.
+                if not (self.playback is not None and self.screen == Screen.PLAYBACK):
+                    self._draw()
+                # Status export for the control API: 5 Hz is plenty and avoids
+                # hammering the SD card 30x/s (the IO starves the audio pipeline).
+                if now - self._last_state_write >= 0.2:
+                    self._write_runtime_state()
+                    self._last_state_write = now
                 self._flush_screenshots()
                 clock.tick(FPS)
         except Exception as exc:
