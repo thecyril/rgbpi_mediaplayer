@@ -616,6 +616,53 @@ def _parse_frame_rate(raw: object) -> Optional[float]:
         return None
 
 
+# How many frames to sample when measuring the real frame rate from per-frame
+# durations (used to catch 24p content mislabelled as NTSC by the container).
+_FPS_SAMPLE_FRAMES = int(os.environ.get("DVDPLAYER_FPS_SAMPLE_FRAMES", "100") or "100")
+
+
+def _probe_real_fps(uri: str) -> Optional[float]:
+    """Real frame rate from the median of actual per-frame durations.
+
+    The container's avg_frame_rate / r_frame_rate lies for VFR (and some
+    telecined) files muxed at an NTSC rate — e.g. 24p anime that reports
+    29.97. Measuring `pkt_duration_time` over a sample of frames recovers the
+    true presentation rate. Returns 1 / median(duration), or None.
+    """
+    ffprobe = _which("ffprobe") or ("/usr/bin/ffprobe" if Path("/usr/bin/ffprobe").exists() else None)
+    if not ffprobe:
+        return None
+    args = [
+        ffprobe, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "frame=pkt_duration_time",
+        "-read_intervals", "%+#" + str(max(20, _FPS_SAMPLE_FRAMES)),
+        "-of", "csv=p=0", uri,
+    ]
+    try:
+        out = subprocess.check_output(
+            args, stderr=subprocess.DEVNULL, text=True,
+            timeout=max(FFPROBE_TIMEOUT_SECS * 2.0, 12.0),
+        )
+    except Exception:
+        return None
+    durs = []
+    for line in out.split("\n"):
+        line = line.strip().rstrip(",")
+        if not line:
+            continue
+        try:
+            d = float(line)
+        except ValueError:
+            continue
+        if d > 0:
+            durs.append(d)
+    if len(durs) < 20:
+        return None
+    durs.sort()
+    median = durs[len(durs) // 2]
+    return (1.0 / median) if median > 0 else None
+
+
 def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
     ffprobe = _which("ffprobe") or ("/usr/bin/ffprobe" if Path("/usr/bin/ffprobe").exists() else None)
     if not ffprobe:
@@ -655,6 +702,21 @@ def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
             field_order = stream.get("field_order")
             if width <= 0 or height <= 0:
                 continue
+            # The container's frame rate lies for VFR / telecined files muxed at
+            # an NTSC rate: a 29.97/30/60 label is often really 24p anime/film.
+            # When the label is NTSC, measure the real per-frame rate and prefer
+            # it if it's film — this is what routes such files to 50Hz+24->25
+            # (smooth 2:2) instead of 60Hz 3:2 judder. Other rates are untouched.
+            if fps and _is_ntsc_rate(float(fps)):
+                real = _probe_real_fps(uri)
+                if real and _is_film_rate(real):
+                    # Snap to the canonical film rate. The per-frame durations
+                    # are ms-quantized (42ms -> measured ~23.81), but the true
+                    # rate is 23.976 (or 24.0); using the exact value makes the
+                    # 24->25 speedup land on EXACTLY 25fps -> clean 2:2 at 50Hz.
+                    # Without snapping, 25/23.81=1.05 overshoots to ~25.17fps
+                    # (ratio 1.986, a hitch every ~3s).
+                    fps = 24.0 if abs(real - 24.0) < abs(real - 23.976) else 24000.0 / 1001.0
             if fps:
                 _VIDEO_FPS_CACHE[str(uri)] = float(fps)
             if field_order is not None:
