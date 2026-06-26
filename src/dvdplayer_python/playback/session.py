@@ -8,10 +8,19 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from dvdplayer_python.core.debuglog import log_event
 from dvdplayer_python.core.models import PlaybackKind, PlaybackPrefs, PlaybackSource
+
+
+class PlaybackCancelled(Exception):
+    """Raised inside PlaybackSession.start when the caller cancels mid-bring-up.
+
+    Lets a background start thread bail out *after* the slow ffprobe but
+    *before* spawning mpv, so a cancelled/superseded request never leaves an
+    orphan player fighting the live one for the DRM output.
+    """
 
 RGBPI_CONNECTOR_NAME = os.environ.get("DVDPLAYER_DRM_CONNECTOR", "VGA-1")
 OVERLAY_MAIN_ID = 1
@@ -663,7 +672,7 @@ def _probe_real_fps(uri: str) -> Optional[float]:
     return (1.0 / median) if median > 0 else None
 
 
-def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
+def _probe_video_info(uri: str, prefs: Optional[PlaybackPrefs] = None) -> Optional[VideoProbeInfo]:
     ffprobe = _which("ffprobe") or ("/usr/bin/ffprobe" if Path("/usr/bin/ffprobe").exists() else None)
     if not ffprobe:
         return None
@@ -707,7 +716,9 @@ def _probe_video_info(uri: str) -> Optional[VideoProbeInfo]:
             # When the label is NTSC, measure the real per-frame rate and prefer
             # it if it's film — this is what routes such files to 50Hz+24->25
             # (smooth 2:2) instead of 60Hz 3:2 judder. Other rates are untouched.
-            if fps and _is_ntsc_rate(float(fps)):
+            # Gated on the PAL speedup: with it off, film and NTSC both route to
+            # 480i/60Hz anyway, so the extra ~100-frame probe would be pure waste.
+            if _pal_speedup_enabled(prefs) and fps and _is_ntsc_rate(float(fps)):
                 real = _probe_real_fps(uri)
                 if real and _is_film_rate(real):
                     # Snap to the canonical film rate. The per-frame durations
@@ -853,7 +864,7 @@ def _target_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPref
                 if mode:
                     log_event("video_timing_probe", title=source.title, kind=source.kind.value, width=dims[0], height=dims[1], fps=None, mode=mode, probe="authored_dvd")
                 return mode
-        info = _probe_video_info(source.uri)
+        info = _probe_video_info(source.uri, prefs)
         if info:
             mode = _desired_output_mode(info.width, info.height, info.fps, prefs=prefs)
             if not mode and info.field_order:
@@ -907,7 +918,7 @@ def _target_mode_for_source(source: PlaybackSource, prefs: Optional[PlaybackPref
         )
         return hint_fps_mode
 
-    info = _probe_video_info(source.uri)
+    info = _probe_video_info(source.uri, prefs)
     if not info:
         fps_only = _probe_video_fps(source.uri)
         fps_only_mode = _mode_from_fps_only(fps_only)
@@ -1208,7 +1219,18 @@ class PlaybackSession:
         self._ipc_buf: bytes = b""
 
     @classmethod
-    def start(cls, app_dir: Path, source: PlaybackSource, prefs: Optional[PlaybackPrefs] = None) -> "PlaybackSession":
+    def start(
+        cls,
+        app_dir: Path,
+        source: PlaybackSource,
+        prefs: Optional[PlaybackPrefs] = None,
+        *,
+        cancelled: Optional[Callable[[], bool]] = None,
+    ) -> "PlaybackSession":
+        def _check_cancelled() -> None:
+            if cancelled is not None and cancelled():
+                raise PlaybackCancelled()
+
         fallback_bins = [
             app_dir / "bin" / "mpv",
         ]
@@ -1226,6 +1248,10 @@ class PlaybackSession:
             raise FileNotFoundError(f"Bundled mpv not found: '{bundled}'")
 
         target_mode = _target_mode_for_source(source, prefs)
+        # The probe above is the slow part (ffprobe over a possibly-asleep
+        # network disk). Bail here if the request was cancelled meanwhile, so we
+        # never spawn an orphan mpv.
+        _check_cancelled()
         drm_target = _resolve_drm_launch_target(target_mode) if target_mode else None
 
         prefer_drm = os.environ.get("DVDPLAYER_PREFER_DRM", "1") != "0"
@@ -1273,6 +1299,7 @@ class PlaybackSession:
                     except Exception:
                         pass
 
+        _check_cancelled()
         child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
         try:
             cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
