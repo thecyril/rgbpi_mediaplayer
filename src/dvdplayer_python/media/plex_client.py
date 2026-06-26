@@ -12,6 +12,8 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+from dvdplayer_python.core.debuglog import log_event
+
 
 PLEX_PRODUCT_NAME = "DVD Mediaplayer"
 APP_VERSION = "0.1.0-python"
@@ -259,6 +261,25 @@ class PlexClient:
             return False
 
     def _server_xml(self, path: str) -> str:
+        """Fetch a server XML path, re-resolving the server URI on a dead link.
+
+        The cached ``server_uri`` is picked once at link time and never
+        refreshed, so it goes stale the moment we change networks (the LAN
+        address chosen at home is unreachable from anywhere else). On a
+        connection/timeout error — and only then, never on an HTTP error where
+        the server actually answered — re-run discovery to pick a connection
+        reachable from the current network, then retry once.
+        """
+        try:
+            return self._server_xml_once(path)
+        except (requests.ConnectionError, requests.Timeout):
+            stale_uri = self.state.get("server_uri")
+            log_event("plex_server_uri_stale", uri=stale_uri)
+            self.discover_server()
+            log_event("plex_server_uri_reresolved", uri=self.state.get("server_uri"))
+            return self._server_xml_once(path)
+
+    def _server_xml_once(self, path: str) -> str:
         uri = self.state.get("server_uri")
         token = self.state.get("server_token") or self.state.get("auth_token")
         if not uri or not token:
