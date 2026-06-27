@@ -313,12 +313,22 @@ def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = 
     Probe failure → ac3_transcode (safe: handles any channel count).
     """
     if _resolve_audio_output(prefs) == "jack":
-        return "jack", [
+        alsa_device = _resolve_alsa_device()
+        args = [
             "--audio-channels=stereo",
             "--ao=alsa",
-            f"--audio-device=alsa/{_resolve_alsa_device()}",
-            "--audio-samplerate=48000",
+            f"--audio-device=alsa/{alsa_device}",
         ]
+        # The 48 kHz + s16 pins are bcm2835-specific tuning, applied ONLY to the
+        # default analog DAC (hw:0,0). They are its native rate/format, and the
+        # s16 pin is required because mpv otherwise opens the raw hw: PWM output
+        # at s32 (its preferred depth) and it crackles — there's no plug layer
+        # to convert/buffer. For an overridden device (DVDPLAYER_ALSA_DEVICE → a
+        # USB DAC or HDMI that does 24/32-bit and/or native 44.1/96/192 kHz),
+        # pin nothing and let mpv negotiate so we never cap a hi-res output.
+        if alsa_device == "hw:0,0":
+            args += ["--audio-samplerate=48000", "--audio-format=s16"]
+        return "jack", args
 
     streams = _probe_audio_streams(source.uri)
     multichannel = [s for s in streams if s["channels"] > 2]
