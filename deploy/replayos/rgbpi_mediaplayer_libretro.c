@@ -63,7 +63,10 @@ void retro_get_system_info(struct retro_system_info *info)
     memset(info, 0, sizeof(*info));
     info->library_name = "rgbpi_mediaplayer";
     info->library_version = "1.0";
-    info->valid_extensions = "lr";
+    /* "lr" covers the Extra-menu slot; the media extensions cover the
+     * Alpha Player main-menu slot (the launcher file is a 0-byte .mkv —
+     * need_fullpath keeps RePlay from trying to load its content). */
+    info->valid_extensions = "lr|mkv|avi|mp4|mp3|flac|ogg|m4a|webm|mov|wmv|mpg|mpeg|vob|ts|m3u";
     info->need_fullpath = true;
 }
 

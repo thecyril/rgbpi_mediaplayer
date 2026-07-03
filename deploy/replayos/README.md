@@ -91,14 +91,15 @@ After the reboot, verify everything (9 checks: modes, menu entry, DAC, audio):
 /opt/rgbpi_mediaplayer/deploy/replayos/install.sh --check
 ```
 
-Then select **"audio_video_test"** in RePlay's Extra menu to start the player.
-`install.sh` is idempotent (safe to re-run after a `git pull`; never touches
-`state/`). It installs the apt dependencies, fixes the bundle libs, builds the
-EDID override from the dongle's own EDID and wires it into `cmdline.txt`,
-installs the launcher, compiles the stub core and patches `cores.cfg`, and
-seeds the HDMI audio preference. The launcher's csync watchdog follows the
-user's RePlay `video_crt_csync_mode` setting (AND/XOR/separated) and finds the
-DAC's i2c bus dynamically (kernel updates renumber the DDC buses).
+Then open **"Alpha Player"** in RePlay's **main menu** and pick **MEDIA
+PLAYER**. `install.sh` is idempotent (safe to re-run after a `git pull`; never
+touches `state/`). It installs the apt dependencies, fixes the bundle libs,
+builds the EDID override from the dongle's own EDID and wires it into
+`cmdline.txt`, installs the launcher, compiles the stub core and patches
+`cores.cfg`, and seeds the HDMI audio preference. The launcher's csync
+watchdog follows the user's RePlay `video_crt_csync_mode` setting
+(AND/XOR/separated) and finds the DAC's i2c bus dynamically (kernel updates
+renumber the DDC buses).
 
 ### What the installer does (manual reference)
 
@@ -114,15 +115,20 @@ DAC's i2c bus dynamically (kernel updates renumber the DDC buses).
    the player, restarts RePlay on exit). Geometry/env tuning lives at the top
    (`DVDPLAYER_DISPLAY_W/H`, `DVDPLAYER_MPV_DRM_MODE(_PAL)`,
    `DVDPLAYER_DRM_CONNECTOR`, `DVDPLAYER_HDMI_ALSA_DEVICE`).
-4. **RePlay menu entry** (config-only hijack, no binary patching): RePlay's
-   `game_launcher` maps Extra entries to cores by hardcoded name; only
-   `pibench.lr` and `audio_video_test.lr` map to cores, and `.sh` entries are
-   blocked ("FORBIDDEN!!!"). The name→.so mapping goes through
-   `/opt/replay/cores/cores.cfg` (editable): the stub core
-   (`rgbpi_mediaplayer_libretro.c`, compiled on-Pi) is wired into the
-   `[avtest]` section. The menu label stays "audio_video_test" (it is the
-   hardcoded filename; renaming would require patching the replay binary).
-   Revert = restore `cores.cfg.orig`.
+4. **RePlay main-menu entry** (config-only hijack, no binary patching):
+   "Alpha Player" is a first-class main-menu system in RePlay — its tile
+   (shown when `view_player="true"`, i.e. SETTINGS → VIEW → SHOW ALPHA
+   PLAYER) lists the media files of `/media/sd/roms/alpha_player/` and
+   launches them through the core mapped in `/opt/replay/cores/cores.cfg`
+   `[alpha_player]` (stock: `alpha_player_libretro.so`). The installer points
+   that section at the stub core (`rgbpi_mediaplayer_libretro.c`, compiled
+   on-Pi) and drops a 0-byte `MEDIA PLAYER.mkv` launcher file in the folder —
+   only its name shows in the list, and the stub ignores the path and fires
+   `replay_launch.sh` instead. Revert = restore `cores.cfg.orig`.
+   (Alternative Extra-menu route, same idea: `.sh` entries are blocked
+   ("FORBIDDEN!!!") and `.lr` names are hardcoded, but the stock
+   `audio_video_test.lr` maps to `get_core("avtest")` whose `[avtest]`
+   section can be pointed at the stub the same way.)
 5. **Audio**: fresh installs are seeded with `audio_output=hdmi`; existing
    installs keep their choice (SETTINGS → AUDIO OUTPUT → **HDMI (RGB-PI 2)**).
 

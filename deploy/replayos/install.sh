@@ -38,8 +38,9 @@ if [ "${1:-}" = "--check" ]; then
     check "cmdline.txt EDID override"                 grep -q 'drm\.edid_firmware=' "$CMDLINE"
     check "launcher installed"                        test -x "$APP_TARGET/replay_launch.sh"
     check "stub core loads (libretro API)"            python3 -c "import ctypes; assert ctypes.CDLL('/opt/replay/cores/rgbpi_mediaplayer_libretro.so').retro_api_version()==1"
-    check "cores.cfg [avtest] -> stub"                sh -c "grep -A3 '\[avtest\]' '$CORES_CFG' | grep -q rgbpi_mediaplayer_libretro"
-    check "Extra menu entry (audio_video_test.lr)"    test -e /opt/replay/extra/audio_video_test.lr
+    check "cores.cfg [alpha_player] -> stub"          sh -c "grep -A3 '\[alpha_player\]' '$CORES_CFG' | grep -q rgbpi_mediaplayer_libretro"
+    check "Alpha Player launcher entry"               test -e "/media/sd/roms/alpha_player/MEDIA PLAYER.mkv"
+    check "Alpha Player tile enabled (view_player)"   grep -q "view_player *= *\"true\"" /media/sd/config/replay.cfg
     check "vc4-hdmi sound card"                       grep -q vc4hdmi /proc/asound/cards
     modprobe -q i2c-dev 2>/dev/null || true
     dac=""
@@ -49,7 +50,7 @@ if [ "${1:-}" = "--check" ]; then
     done
     check "RGB-Pi 2 DAC answers on i2c (bus ${dac:-?})" test -n "$dac"
     if [ "$ok" = 1 ]; then
-        echo; echo "All good — select \"audio_video_test\" in RePlay's Extra menu."
+        echo; echo "All good — open \"Alpha Player\" in RePlay's main menu and pick MEDIA PLAYER."
     else
         echo; echo "Some checks failed — see deploy/replayos/README.md (Diagnostics)."; exit 1
     fi
@@ -120,13 +121,16 @@ else
     echo "cmdline.txt already set"
 fi
 
-say "6/7 RePlay menu entry (stub core on the audio_video_test slot)"
+say "6/7 RePlay main-menu entry (Alpha Player slot)"
 gcc -O2 -shared -fPIC -o /opt/replay/cores/rgbpi_mediaplayer_libretro.so \
     "$APP_TARGET/deploy/replayos/rgbpi_mediaplayer_libretro.c"
 [ -f "$CORES_CFG.orig" ] || cp "$CORES_CFG" "$CORES_CFG.orig"
-# The Extra entry itself is the stock 0-byte audio_video_test.lr (only the
-# hardcoded NAME matters to replay's game_launcher); recreate it if absent.
-[ -e /opt/replay/extra/audio_video_test.lr ] || : > /opt/replay/extra/audio_video_test.lr
+# "Alpha Player" is a first-class main-menu system: its tile lists the media
+# files of /media/sd/roms/alpha_player/ and launches them through the core
+# mapped in cores.cfg [alpha_player]. Point that core at our stub and drop a
+# 0-byte launcher file in the folder (only its NAME shows in the list; the
+# stub ignores the path). The stock alpha player core stays on disk;
+# revert = restore cores.cfg.orig.
 python3 - "$CORES_CFG" <<'EOF'
 import re, sys
 path = sys.argv[1]
@@ -135,17 +139,23 @@ STUB = "rgbpi_mediaplayer_libretro.so"
 def repl(match):
     body = re.sub(r'"(?:[^"]*)"', f'"{STUB}"', match.group(2))
     return match.group(1) + body
-new, n = re.subn(r'(\[avtest\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', repl, text)
+new, n = re.subn(r'(\[alpha_player\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', repl, text)
 if n == 0:
-    # No [avtest] section in this RePlayOS version: append one.
-    new = text.rstrip("\n") + f'\n\n[avtest]\nlow = "{STUB}"\nmid = "{STUB}"\nhi = "{STUB}"\n'
+    # No [alpha_player] section in this RePlayOS version: append one.
+    new = text.rstrip("\n") + f'\n\n[alpha_player]\nlow = "{STUB}"\nmid = "{STUB}"\nhi = "{STUB}"\n'
 if new != text:
     open(path, "w").write(new)
-# Verify: the [avtest] section must now reference the stub.
-section = re.search(r'\[avtest\]\n(?:.*\n)*?(?=\[|\Z)', open(path).read())
+# Verify: the [alpha_player] section must now reference the stub.
+section = re.search(r'\[alpha_player\]\n(?:.*\n)*?(?=\[|\Z)', open(path).read())
 assert section and STUB in section.group(0), "cores.cfg patch failed"
-print(f"cores.cfg: [avtest] -> {STUB}" + ("" if n else " (section added)"))
+print(f"cores.cfg: [alpha_player] -> {STUB}" + ("" if n else " (section added)"))
 EOF
+mkdir -p /media/sd/roms/alpha_player
+: > "/media/sd/roms/alpha_player/MEDIA PLAYER.mkv"
+echo "menu entry: Alpha Player -> MEDIA PLAYER"
+if ! grep -q 'view_player *= *"true"' /media/sd/config/replay.cfg 2>/dev/null; then
+    echo "NOTE: enable the tile in RePlay: SETTINGS -> VIEW -> SHOW ALPHA PLAYER"
+fi
 
 say "7/7 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
 PREFS="$APP_TARGET/state/playback_prefs.json"
@@ -159,4 +169,4 @@ fi
 
 say "DONE — reboot now, then verify with:
     $APP_TARGET/deploy/replayos/install.sh --check
-and select \"audio_video_test\" in RePlay's Extra menu to start the player."
+and open \"Alpha Player\" in RePlay's main menu (entry: MEDIA PLAYER)."
