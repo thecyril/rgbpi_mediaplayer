@@ -46,6 +46,7 @@ from dvdplayer_python.media.youtube_receiver import (
     resolve_youtube_stream,
 )
 from dvdplayer_python.playback.session import (
+    PlaybackCancelled,
     PlaybackSession,
     SUBTITLE_SCALE_DEFAULT,
     SUBTITLE_SCALE_MAX,
@@ -197,6 +198,13 @@ class App:
         self._pending_dvd_nav: Optional[dict] = None
         self.playback: Optional[PlaybackSession] = None
         self.playback_source: Optional[PlaybackSource] = None
+        # Non-blocking playback start: PlaybackSession.start() can block for
+        # 10-20s (ffprobe over a slow/asleep network disk), so it runs on a
+        # worker thread while the UI shows a cancellable BUSY screen. _pending
+        # holds the in-flight request; the token guards against a stale/
+        # cancelled/superseded worker result clobbering the live session.
+        self._pending_playback: Optional[dict] = None
+        self._playback_start_token = 0
         self.return_screen_after_playback: Optional[Screen] = None
         self.return_section_after_playback = ""
         self.return_list_items: list[ListItem] = []
@@ -817,6 +825,8 @@ class App:
             self.handle_plex_code_action(action)
         elif self.screen == Screen.YOUTUBE_LINK:
             self.handle_youtube_link_action(action)
+        elif self.screen == Screen.BUSY:
+            self.handle_busy_action(action)
 
     def handle_home_action(self, action: Action):
         if action == Action.UP:
@@ -2506,6 +2516,8 @@ class App:
                 self._finish_youtube_resolve(payload, result, error)
             elif event == "dvd_titles_done":
                 self._finish_dvd_titles(payload, result, error)
+            elif event == "playback_start_done":
+                self._finish_playback_start(payload, result, error)
 
     def _finish_network_scan(self, payload, hosts, error: Optional[str]):
         if isinstance(payload, dict):
@@ -2617,6 +2629,17 @@ class App:
         self.busy_label = ""
         self.busy_started_at = 0.0
         self.busy_frame = 0
+
+    def handle_busy_action(self, action: Action):
+        # Only playback bring-up is cancellable (the network/youtube busy tasks
+        # are short and have no teardown). BACK invalidates the in-flight start
+        # so _finish_playback_start discards its session, then returns to list.
+        if action == Action.BACK and self.busy_context == "playback_start":
+            self._pending_playback = None
+            self._playback_start_token += 1  # supersede → worker result is stale
+            self._clear_busy()
+            self._return_from_failed_playback()
+            log_event("playback_start_cancelled")
 
     def open_plex(self):
         if self.plex.has_token():
@@ -2986,18 +3009,78 @@ class App:
             self.return_section_after_playback = "HOME"
             self.return_list_items = []
             self.return_list_selected = 0
+        # Bring the session up on a worker thread: PlaybackSession.start() can
+        # block 10-20s (ffprobe over a slow/asleep network disk) and must not
+        # freeze the UI. A cancellable BUSY screen covers the wait; the rest of
+        # the setup runs in _finish_playback_start once the session is live.
+        self._playback_start_token += 1
+        token = self._playback_start_token
+        self._pending_playback = {
+            "token": token,
+            "source": source,
+            "bookmark_key": bookmark_key,
+            "start_from_beginning": start_from_beginning,
+            "resume_seconds": resume_seconds,
+            "resume_bookmark": resume_bookmark,
+        }
+        prefs = self._playback_prefs_for_session()
+        self._start_busy(
+            "playback_start",
+            f"LOADING {source.title[:18]}",
+            self.return_screen_after_playback or Screen.HOME,
+            self.return_section_after_playback or "HOME",
+        )
+        threading.Thread(
+            target=self._playback_start_worker,
+            args=(source, prefs, token),
+            daemon=True,
+        ).start()
+
+    def _playback_start_worker(self, source: PlaybackSource, prefs, token: int):
+        """Worker thread: bring up the (potentially slow) playback session.
+
+        The cancelled-check lets start() bail before spawning mpv if this
+        request was cancelled/superseded while its ffprobe was still running
+        (token bumped) — so no orphan player ever reaches the screen.
+        """
         try:
-            self.playback = PlaybackSession.start(self.app_dir, source, self._playback_prefs_for_session())
+            session = PlaybackSession.start(
+                self.app_dir, source, prefs,
+                cancelled=lambda: self._playback_start_token != token,
+            )
+            self.background_queue.put(("playback_start_done", token, session, None))
+        except PlaybackCancelled:
+            log_event("playback_start_aborted", title=source.title)
         except Exception as exc:
-            self.message = MessageBox("PLAYBACK", f"Playback failed: {exc}")
-            if self.return_screen_after_playback == Screen.LIST:
-                self.list_items = list(self.return_list_items)
-                self.list_selected = self.return_list_selected
-                self.set_screen(Screen.LIST, self.return_section_after_playback)
-            else:
-                self.set_screen(Screen.HOME, "HOME")
-            log_event("playback_start_failed", error=str(exc))
+            self.background_queue.put(("playback_start_done", token, None, str(exc)))
+
+    def _finish_playback_start(self, token: int, session, error: Optional[str]):
+        """Main thread: adopt the worker's session (or report its failure)."""
+        pending = self._pending_playback
+        # Stale result — the user cancelled, or a newer start superseded this
+        # one. Discard the orphan session so no mpv process is left running.
+        if not pending or pending.get("token") != token:
+            if session is not None:
+                try:
+                    session.quit()
+                except Exception:
+                    pass
             return
+        self._pending_playback = None
+        self._clear_busy()
+        if error or session is None:
+            self.message = MessageBox("PLAYBACK", f"Playback failed: {error}")
+            self._return_from_failed_playback()
+            log_event("playback_start_failed", error=error)
+            return
+
+        source = pending["source"]
+        bookmark_key = pending["bookmark_key"]
+        start_from_beginning = pending["start_from_beginning"]
+        resume_seconds = pending["resume_seconds"]
+        resume_bookmark = pending["resume_bookmark"]
+
+        self.playback = session
         self.playback_source = source
         self._reset_playback_overlay_state()
         self.playback_bookmark_key = bookmark_key
@@ -3048,6 +3131,15 @@ class App:
             except Exception as exc:
                 log_event("playback_hud_init_failed", error=str(exc))
         self._apply_or_prompt_audio_track()
+
+    def _return_from_failed_playback(self):
+        """Return to the originating list/home after a failed or cancelled start."""
+        if self.return_screen_after_playback == Screen.LIST:
+            self.list_items = list(self.return_list_items)
+            self.list_selected = self.return_list_selected
+            self.set_screen(Screen.LIST, self.return_section_after_playback)
+        else:
+            self.set_screen(Screen.HOME, "HOME")
 
     def stop_playback(self, status: str):
         self.persist_bookmark(force=True)
@@ -3129,9 +3221,10 @@ class App:
 
         if self.screen == Screen.BUSY:
             dots = "." * self.busy_frame
+            cancellable = self.busy_context == "playback_start"
             rows = [
                 (self.busy_label or "Working", dots or ".", True),
-                ("PLEASE WAIT", "NETWORK DISCOVERY", True),
+                ("PLEASE WAIT", "B TO CANCEL" if cancellable else "", True),
             ]
             model = RenderModel(
                 title="DVD MEDIAPLAYER",
