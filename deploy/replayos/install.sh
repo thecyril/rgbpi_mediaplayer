@@ -70,19 +70,27 @@ say "6/7 RePlay menu entry (stub core on the audio_video_test slot)"
 gcc -O2 -shared -fPIC -o /opt/replay/cores/rgbpi_mediaplayer_libretro.so \
     "$APP_TARGET/deploy/replayos/rgbpi_mediaplayer_libretro.c"
 [ -f "$CORES_CFG.orig" ] || cp "$CORES_CFG" "$CORES_CFG.orig"
+# The Extra entry itself is the stock 0-byte audio_video_test.lr (only the
+# hardcoded NAME matters to replay's game_launcher); recreate it if absent.
+[ -e /opt/replay/extra/audio_video_test.lr ] || : > /opt/replay/extra/audio_video_test.lr
 python3 - "$CORES_CFG" <<'EOF'
 import re, sys
 path = sys.argv[1]
 text = open(path).read()
+STUB = "rgbpi_mediaplayer_libretro.so"
 def repl(match):
-    body = re.sub(r'"(?:[^"]*)"', '"rgbpi_mediaplayer_libretro.so"', match.group(2))
+    body = re.sub(r'"(?:[^"]*)"', f'"{STUB}"', match.group(2))
     return match.group(1) + body
-new = re.sub(r'(\[avtest\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', repl, text)
+new, n = re.subn(r'(\[avtest\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', repl, text)
+if n == 0:
+    # No [avtest] section in this RePlayOS version: append one.
+    new = text.rstrip("\n") + f'\n\n[avtest]\nlow = "{STUB}"\nmid = "{STUB}"\nhi = "{STUB}"\n'
 if new != text:
     open(path, "w").write(new)
-    print("cores.cfg: [avtest] -> rgbpi_mediaplayer_libretro.so (backup: cores.cfg.orig)")
-else:
-    print("cores.cfg already patched")
+# Verify: the [avtest] section must now reference the stub.
+section = re.search(r'\[avtest\]\n(?:.*\n)*?(?=\[|\Z)', open(path).read())
+assert section and STUB in section.group(0), "cores.cfg patch failed"
+print(f"cores.cfg: [avtest] -> {STUB}" + ("" if n else " (section added)"))
 EOF
 
 say "7/7 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
