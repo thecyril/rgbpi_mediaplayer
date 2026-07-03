@@ -143,11 +143,22 @@ new, n = re.subn(r'(\[alpha_player\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', repl, tex
 if n == 0:
     # No [alpha_player] section in this RePlayOS version: append one.
     new = text.rstrip("\n") + f'\n\n[alpha_player]\nlow = "{STUB}"\nmid = "{STUB}"\nhi = "{STUB}"\n'
+# Migration: early installs hijacked the [avtest] diagnostics slot — give it
+# back to the stock audio/video test core.
+def restore_avtest(match):
+    if STUB not in match.group(2):
+        return match.group(0)
+    print("cores.cfg: [avtest] restored to stock avtest_libretro.so")
+    return match.group(1) + re.sub(r'"(?:[^"]*)"', '"avtest_libretro.so"', match.group(2))
+new = re.sub(r'(\[avtest\]\n)((?:\s*\w+\s*=\s*"[^"]*"\n)+)', restore_avtest, new)
 if new != text:
     open(path, "w").write(new)
-# Verify: the [alpha_player] section must now reference the stub.
-section = re.search(r'\[alpha_player\]\n(?:.*\n)*?(?=\[|\Z)', open(path).read())
+# Verify: [alpha_player] must reference the stub, [avtest] must not.
+final = open(path).read()
+section = re.search(r'\[alpha_player\]\n(?:.*\n)*?(?=\[|\Z)', final)
 assert section and STUB in section.group(0), "cores.cfg patch failed"
+avtest = re.search(r'\[avtest\]\n(?:.*\n)*?(?=\[|\Z)', final)
+assert not (avtest and STUB in avtest.group(0)), "avtest still hijacked"
 print(f"cores.cfg: [alpha_player] -> {STUB}" + ("" if n else " (section added)"))
 EOF
 mkdir -p /media/sd/roms/alpha_player
