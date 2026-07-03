@@ -13,7 +13,15 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 export DVDPLAYER_MPV_BIN="${DVDPLAYER_MPV_BIN:-$APP_DIR/bin/mpv}"
 EXTRA_LIB_DIRS="$APP_DIR/lib"
 if [ -d "$RUNTIME_ROOT/lib/aarch64-linux-gnu" ]; then
-  EXTRA_LIB_DIRS="$RUNTIME_ROOT/lib/aarch64-linux-gnu:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu/pulseaudio:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu/samba:$EXTRA_LIB_DIRS"
+  RUNTIME_LIB_DIRS="$RUNTIME_ROOT/lib/aarch64-linux-gnu:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu/pulseaudio:$RUNTIME_ROOT/usr/lib/aarch64-linux-gnu/samba"
+  if [ "${DVDPLAYER_RUNTIME_LIBS:-all}" = "mpv-only" ]; then
+    # RePlayOS (Debian trixie): the bundled bullseye rootfs must stay invisible
+    # to the system python/pygame (SDL + glibc version clashes) — only the
+    # bundled mpv child gets it, via _child_env in playback/session.py.
+    export DVDPLAYER_MPV_LD_LIBRARY_PATH="$RUNTIME_LIB_DIRS"
+  else
+    EXTRA_LIB_DIRS="$RUNTIME_LIB_DIRS:$EXTRA_LIB_DIRS"
+  fi
 fi
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
   export LD_LIBRARY_PATH="$EXTRA_LIB_DIRS:$LD_LIBRARY_PATH"

@@ -251,15 +251,25 @@ def _ac3_transcode_args() -> list[str]:
 
 
 def _resolve_audio_output(prefs: Optional[PlaybackPrefs] = None) -> str:
-    """Resolve the audio output path: ``"jack"`` or ``"optical_5_1"``.
+    """Resolve the audio output path: ``"jack"``, ``"optical_5_1"`` or ``"hdmi"``.
 
     Order: ``DVDPLAYER_AUDIO_OUTPUT`` env var > ``prefs.audio_output`` > "jack".
+    ``"hdmi"`` targets the vc4-hdmi PCM (RePlayOS / RGB-Pi 2: the DAC extracts
+    the HDMI audio to its own jack).
     """
-    env = os.environ.get("DVDPLAYER_AUDIO_OUTPUT", "").strip().lower()
-    if env in {"jack", "optical_5_1", "optical"}:
-        return "optical_5_1" if env in {"optical_5_1", "optical"} else "jack"
-    value = str(getattr(prefs, "audio_output", "jack") or "jack").strip().lower()
-    return "optical_5_1" if value in {"optical_5_1", "optical"} else "jack"
+
+    def _norm(raw: str) -> Optional[str]:
+        raw = raw.strip().lower()
+        if raw in {"optical_5_1", "optical"}:
+            return "optical_5_1"
+        if raw in {"jack", "hdmi"}:
+            return raw
+        return None
+
+    env = _norm(os.environ.get("DVDPLAYER_AUDIO_OUTPUT", ""))
+    if env:
+        return env
+    return _norm(str(getattr(prefs, "audio_output", "jack") or "jack")) or "jack"
 
 
 def _probe_audio_streams(uri: str) -> list[dict[str, Any]]:
@@ -321,7 +331,19 @@ def _audio_output_plan(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = 
       * else (stereo only) → PCM stereo straight to the UT23.
     Probe failure → ac3_transcode (safe: handles any channel count).
     """
-    if _resolve_audio_output(prefs) == "jack":
+    output = _resolve_audio_output(prefs)
+    if output == "hdmi":
+        # RePlayOS / RGB-Pi 2: audio rides the HDMI link to the DAC (which
+        # feeds its own 3.5mm jack). The raw vc4-hdmi PCM only accepts
+        # IEC958 subframes, so open the ALSA *card profile* which does the
+        # linear→IEC958 conversion, and pin nothing — let mpv negotiate.
+        hdmi_device = os.environ.get("DVDPLAYER_HDMI_ALSA_DEVICE", "").strip() or "default:CARD=vc4hdmi0"
+        return "hdmi", [
+            "--audio-channels=stereo",
+            "--ao=alsa",
+            f"--audio-device=alsa/{hdmi_device}",
+        ]
+    if output == "jack":
         alsa_device = _resolve_alsa_device()
         args = [
             "--audio-channels=stereo",
@@ -583,6 +605,22 @@ def _desired_output_mode(
 
 
 def _mpv_drm_mode_value(target_mode: str) -> str:
+    # RePlayOS + RGB-Pi 2 (HDMI CH7101 DAC): the CRT is 15 kHz-only and
+    # vc4-hdmi rejects pixel clocks under ~31 MHz, so the classic narrow
+    # 720x480i/720x576i modes don't exist there — playback must go to the
+    # wide super-resolution mode instead (same timing RePlay's UI uses) and
+    # mpv scales the content into it. DVDPLAYER_MPV_DRM_MODE selects that
+    # output mode (e.g. "2560x240"); unset = legacy RGB-Pi OS4 behaviour.
+    override = os.environ.get("DVDPLAYER_MPV_DRM_MODE")
+    if override:
+        # PAL-routed content gets the 50 Hz variant when one is provided:
+        # 25 fps then maps to exactly two vsyncs per frame instead of the
+        # juddery 2:3 pulldown a fixed 60 Hz output forces.
+        if target_mode == "720x576i":
+            pal = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL", "").strip()
+            if pal:
+                return pal
+        return override
     if target_mode == "720x576i":
         return "720x576@50"
     if target_mode == "720x480i":
@@ -611,6 +649,24 @@ def _friendly_mode_label(raw: str) -> str:
 
 
 def _monitor_pixel_aspect_for_mode(target_mode: Optional[str]) -> Optional[float]:
+    # With a DVDPLAYER_MPV_DRM_MODE override the real output geometry is the
+    # override, not the logical target: pixel aspect = (4/3) / (W/H) so mpv
+    # letterboxes content correctly on the 4:3 CRT (e.g. 2560x240 -> 0.125).
+    # PAL content plays on a different mode (see _mpv_drm_mode_value): its
+    # geometry is the PAL mode value itself when it's a "WxH" name (e.g.
+    # "2560x288" -> 0.15), or DVDPLAYER_MPV_DRM_MODE_PAL_GEOM when the mode
+    # is selected by index.
+    override = os.environ.get("DVDPLAYER_MPV_DRM_MODE")
+    if override:
+        if target_mode == "720x576i":
+            pal = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL", "").strip()
+            if pal:
+                geom = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL_GEOM", "").strip()
+                override = geom or pal
+        m = re.match(r"^\s*(\d+)x(\d+)", override)
+        if m and int(m.group(1)) > 0:
+            return (4.0 / 3.0) * int(m.group(2)) / int(m.group(1))
+        return None
     if target_mode == "720x480i":
         return 8.0 / 9.0
     if target_mode == "720x576i":
@@ -1236,10 +1292,23 @@ class PlaybackSession:
         prefs: Optional[PlaybackPrefs] = None,
         *,
         cancelled: Optional[Callable[[], bool]] = None,
+        before_spawn: Optional[Callable[[], None]] = None,
     ) -> "PlaybackSession":
         def _check_cancelled() -> None:
             if cancelled is not None and cancelled():
                 raise PlaybackCancelled()
+
+        # Fired once, right before the first mpv spawn: the UI uses it to
+        # drop its SDL/KMSDRM window (and the DRM master with it) at the last
+        # possible moment, keeping the BUSY screen visible during the slow
+        # probe phase while still freeing the display before mpv needs it.
+        spawn_notified = False
+
+        def _notify_spawn() -> None:
+            nonlocal spawn_notified
+            if before_spawn is not None and not spawn_notified:
+                spawn_notified = True
+                before_spawn()
 
         fallback_bins = [
             app_dir / "bin" / "mpv",
@@ -1272,6 +1341,7 @@ class PlaybackSession:
         ipc_path.unlink(missing_ok=True)
 
         if prefer_drm:
+            _notify_spawn()
             child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=True)
             try:
                 cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
@@ -1310,6 +1380,7 @@ class PlaybackSession:
                         pass
 
         _check_cancelled()
+        _notify_spawn()
         child, tty_handle, audio_mode = cls._spawn_mpv(app_dir, source, prefs, mpv, ipc_path, target_mode, drm_target, prefer_drm=False)
         try:
             cls._wait_for_ipc(child, ipc_path, timeout_s=8.0)
@@ -1584,6 +1655,12 @@ class PlaybackSession:
                 "--vo=drm",
                 f"--drm-connector={_mpv_drm_connector_value(drm_target)}",
                 f"--drm-mode={_mpv_drm_mode_value(target_mode)}",
+                # vo=drm scales in software (swscale) and the default scaler
+                # saturates a Pi 4 core on 2560-wide CRT modes (measured
+                # ~5 dropped frames/s on a PAL DVD). fast-bilinear measures
+                # 0 drops, and the CRT's own beam smoothing hides the scaler
+                # quality difference at these super-res widths.
+                "--sws-scaler=fast-bilinear",
             ]
             log_event(
                 "mpv_drm_target",
@@ -2257,6 +2334,12 @@ def _child_env(app_dir: Path) -> dict[str, str]:
     lib_paths = [
         str(app_dir / "lib"),
     ]
+    # RePlayOS: the bundled bullseye rootfs libs are kept out of the UI
+    # process (SDL/glibc clashes with the newer host) and injected for the
+    # mpv child only — see DVDPLAYER_RUNTIME_LIBS=mpv-only in the launcher.
+    mpv_libs = env.get("DVDPLAYER_MPV_LD_LIBRARY_PATH", "")
+    if mpv_libs:
+        lib_paths.insert(0, mpv_libs)
     existing = env.get("LD_LIBRARY_PATH", "")
     env["LD_LIBRARY_PATH"] = ":".join([p for p in (lib_paths + ([existing] if existing else [])) if p])
     return env

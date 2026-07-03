@@ -46,14 +46,49 @@ class RenderModel:
 class Renderer:
     def __init__(self):
         pygame.init()
-        flags = 0
-        if __import__("os").environ.get("DVDPLAYER_WINDOWED") != "1":
-            flags |= pygame.FULLSCREEN
-        self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H), flags)
-        pygame.mouse.set_visible(False)
+        # The UI plays no sounds, but pygame.init() opens the ALSA device and
+        # HOLDS it for the whole app lifetime — on RePlayOS that's the single
+        # vc4-hdmi PCM (exclusive open), which starves mpv of audio during
+        # playback. Release it for good.
+        pygame.mixer.quit()
+        self.display: Optional[pygame.Surface] = None
+        self._create_display()
+        self.screen = pygame.Surface((WINDOW_W, WINDOW_H))
         self.font_l = pygame.font.SysFont("DejaVu Sans", 16, bold=True)
         self.font_m = pygame.font.SysFont("DejaVu Sans", 12, bold=True)
         self.font_s = pygame.font.SysFont("DejaVu Sans", 10)
+
+    def _create_display(self) -> None:
+        import os as _os
+
+        flags = 0
+        if _os.environ.get("DVDPLAYER_WINDOWED") != "1":
+            flags |= pygame.FULLSCREEN
+        _dw = int(_os.environ.get("DVDPLAYER_DISPLAY_W", "640"))
+        _dh = int(_os.environ.get("DVDPLAYER_DISPLAY_H", "480"))
+        self.display = pygame.display.set_mode((_dw, _dh), flags)
+        pygame.mouse.set_visible(False)
+
+    def release_display(self) -> None:
+        """Tear down the SDL window — and with it the DRM master — so an
+        external video player (mpv --vo=drm) can modeset the CRT.
+
+        On SDL2/KMSDRM the window holds DRM master for the whole card; two
+        masters cannot coexist, so mpv's CRTC setup fails with EPERM while the
+        UI window exists. Gamepad input is unaffected (raw /dev/input/js0
+        thread), and the main loop already skips rendering during playback.
+        """
+        if not pygame.display.get_init():
+            return
+        pygame.display.quit()
+        self.display = None
+
+    def reacquire_display(self) -> None:
+        """Re-create the SDL window after external playback released the DRM."""
+        if pygame.display.get_init() and self.display is not None:
+            return
+        pygame.display.init()
+        self._create_display()
 
     @staticmethod
     def _fit_text(font: pygame.font.Font, text: str, max_width: int) -> str:
@@ -142,6 +177,7 @@ class Renderer:
             self.text(self._fit_text(self.font_s, model.message_body or "", msg_w - 24), WINDOW_W // 2, msg_y + 40, size="s", center=True)
             self.text("A/B CLOSE", WINDOW_W // 2, msg_y + 70, color=THEME_TEXT_DIM, size="s", center=True)
 
+        pygame.transform.scale(self.screen, self.display.get_size(), self.display)
         pygame.display.flip()
 
     def screenshot(self, path: str) -> None:
