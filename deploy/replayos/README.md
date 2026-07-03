@@ -76,13 +76,19 @@ vc4-hdmi PCM is exclusive and the UI plays no sounds).
 
 ## Install
 
-Three commands, as root on the Pi (with the RGB-Pi 2 on HDMI0 and the CRT
-connected):
+Three commands over SSH, as root on the Pi (RePlayOS default root login; RGB-Pi
+2 on HDMI0, CRT connected):
 
 ```sh
-apt-get install -y git && git clone --depth 1 https://github.com/thecyril/rgbpi_mediaplayer.git /opt/rgbpi_mediaplayer
+apt-get update && apt-get install -y git && git clone --depth 1 https://github.com/thecyril/rgbpi_mediaplayer.git /opt/rgbpi_mediaplayer
 /opt/rgbpi_mediaplayer/deploy/replayos/install.sh
 reboot
+```
+
+After the reboot, verify everything (9 checks: modes, menu entry, DAC, audio):
+
+```sh
+/opt/rgbpi_mediaplayer/deploy/replayos/install.sh --check
 ```
 
 Then select **"audio_video_test"** in RePlay's Extra menu to start the player.
@@ -90,7 +96,9 @@ Then select **"audio_video_test"** in RePlay's Extra menu to start the player.
 `state/`). It installs the apt dependencies, fixes the bundle libs, builds the
 EDID override from the dongle's own EDID and wires it into `cmdline.txt`,
 installs the launcher, compiles the stub core and patches `cores.cfg`, and
-seeds the HDMI audio preference.
+seeds the HDMI audio preference. The launcher's csync watchdog follows the
+user's RePlay `video_crt_csync_mode` setting (AND/XOR/separated) and finds the
+DAC's i2c bus dynamically (kernel updates renumber the DDC buses).
 
 ### What the installer does (manual reference)
 

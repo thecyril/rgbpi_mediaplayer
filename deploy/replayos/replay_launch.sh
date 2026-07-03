@@ -36,16 +36,37 @@ export DVDPLAYER_ALSA_DEVICE="default:CARD=vc4hdmi0"
 
 # --- CH7101 csync maintenance -------------------------------------------------
 # The RGB-Pi 2 DAC (CH7101, i2c addr 0x78 on the HDMI0 DDC bus) rebuilds its
-# output config on every HDMI mode set and falls back to separated H/V sync.
-# The PVM needs composite sync (AND mode), so re-apply it after each modeset,
-# exactly like the replay binary does at video init (page 4, reg 0xB5 = 0x06).
+# output config on every HDMI mode set and falls back to separated H/V sync →
+# rolling picture. Re-apply the csync mode after each modeset, exactly like
+# the replay binary does at video init (page 4, reg 0xB5).
+# The mode value follows the user's RePlay setting (video_crt_csync_mode in
+# replay.cfg): 0 = AND (0x06, PVM-style csync input), 1 = XOR (0x0C),
+# 2 = separated H/V (0x00).
 # Two triggers, because a modeset to the SAME mode leaves the KMS mode line
 # unchanged: (1) the mode line text changes, (2) the chip's page0/0x61 status
 # blips away from 0xff (observed 0xef for ~200-300 ms at every HDMI retrain).
-CSYNC_BUS=20
+# The DAC sits on the HDMI0 DDC bus, whose number depends on the kernel
+# (13 on 6.12.62, 20 on 6.12.75...). Scan for the first bus that answers a
+# READ at 0x78 (write-probes phantom-ACK on the brcmstb DDC controllers).
+modprobe -q i2c-dev 2>/dev/null
+CSYNC_BUS=""
+for dev in /dev/i2c-*; do
+    b="${dev#/dev/i2c-}"
+    if i2cget -y -a "$b" 0x78 >/dev/null 2>&1; then CSYNC_BUS="$b"; break; fi
+done
+[ -n "$CSYNC_BUS" ] || CSYNC_BUS=20
+echo "$(date -Iseconds) CH7101 on i2c bus $CSYNC_BUS"
+CSYNC_VAL=0x06
+REPLAY_CFG=/media/sd/config/replay.cfg
+if [ -r "$REPLAY_CFG" ]; then
+    case "$(sed -n 's/^video_crt_csync_mode *= *"\([0-9]\)".*/\1/p' "$REPLAY_CFG" | head -1)" in
+        1) CSYNC_VAL=0x0C ;;
+        2) CSYNC_VAL=0x00 ;;
+    esac
+fi
 csync_apply() {
     i2cset -y -a "$CSYNC_BUS" 0x78 0x00 0x04 2>/dev/null
-    i2cset -y -a "$CSYNC_BUS" 0x78 0xB5 0x06 2>/dev/null
+    i2cset -y -a "$CSYNC_BUS" 0x78 0xB5 "$CSYNC_VAL" 2>/dev/null
     i2cset -y -a "$CSYNC_BUS" 0x78 0x00 0x00 2>/dev/null
 }
 current_mode() {
@@ -73,7 +94,6 @@ csync_watchdog() {
         sleep 0.1
     done
 }
-modprobe -q i2c-dev 2>/dev/null
 csync_watchdog &
 WATCHDOG_PID=$!
 # ------------------------------------------------------------------------------

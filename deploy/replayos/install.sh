@@ -22,9 +22,44 @@ say() { printf '\n=== %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root"
+
+# ---------------------------------------------------------------------------
+# install.sh --check : post-reboot verification (read-only + one i2c probe)
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--check" ]; then
+    ok=1
+    check() { # <label> <command...>
+        label="$1"; shift
+        if "$@" >/dev/null 2>&1; then printf 'OK   %s\n' "$label"; else printf 'FAIL %s\n' "$label"; ok=0; fi
+    }
+    modes="$(cat /sys/class/drm/card*-HDMI-A-1/modes 2>/dev/null || true)"
+    check "EDID mode 2560x240 (UI / 60 Hz)"          sh -c "echo '$modes' | grep -q 2560x240"
+    check "EDID mode 2560x288 (PAL / 50 Hz)"          sh -c "echo '$modes' | grep -q 2560x288"
+    check "cmdline.txt EDID override"                 grep -q 'drm\.edid_firmware=' "$CMDLINE"
+    check "launcher installed"                        test -x "$APP_TARGET/replay_launch.sh"
+    check "stub core loads (libretro API)"            python3 -c "import ctypes; assert ctypes.CDLL('/opt/replay/cores/rgbpi_mediaplayer_libretro.so').retro_api_version()==1"
+    check "cores.cfg [avtest] -> stub"                sh -c "grep -A3 '\[avtest\]' '$CORES_CFG' | grep -q rgbpi_mediaplayer_libretro"
+    check "Extra menu entry (audio_video_test.lr)"    test -e /opt/replay/extra/audio_video_test.lr
+    check "vc4-hdmi sound card"                       grep -q vc4hdmi /proc/asound/cards
+    modprobe -q i2c-dev 2>/dev/null || true
+    dac=""
+    for dev in /dev/i2c-*; do
+        b="${dev#/dev/i2c-}"
+        i2cget -y -a "$b" 0x78 >/dev/null 2>&1 && { dac="$b"; break; }
+    done
+    check "RGB-Pi 2 DAC answers on i2c (bus ${dac:-?})" test -n "$dac"
+    if [ "$ok" = 1 ]; then
+        echo; echo "All good — select \"audio_video_test\" in RePlay's Extra menu."
+    else
+        echo; echo "Some checks failed — see deploy/replayos/README.md (Diagnostics)."; exit 1
+    fi
+    exit 0
+fi
+
 [ -e /opt/replay/replay ] || echo "WARNING: /opt/replay/replay not found — is this RePlayOS? Continuing anyway."
 
 say "1/7 apt dependencies"
+apt-get update -qq || echo "WARNING: apt-get update failed (offline?), trying install anyway"
 apt-get install -y --no-install-recommends python3-pygame python3-requests i2c-tools gcc >/dev/null
 echo "ok"
 
@@ -103,4 +138,6 @@ else
     echo "seeded $PREFS"
 fi
 
-say "DONE — reboot now. Then select \"audio_video_test\" in RePlay's Extra menu to start the player."
+say "DONE — reboot now, then verify with:
+    $APP_TARGET/deploy/replayos/install.sh --check
+and select \"audio_video_test\" in RePlay's Extra menu to start the player."
