@@ -74,45 +74,49 @@ select **SETTINGS → AUDIO OUTPUT → HDMI (RGB-PI 2)** (the `hdmi` value of
 itself frees the sound device at startup (`pygame.mixer.quit()` — the single
 vc4-hdmi PCM is exclusive and the UI plays no sounds).
 
-## Install on a fresh RePlayOS
+## Install
 
-Prerequisites: root SSH on the Pi, the player deployed at
-`/opt/rgbpi_mediaplayer` (use `tar` over the network — macOS openrsync drops
-the bundle's 238 symlinks), and `apt-get install -y python3-pygame
-python3-requests i2c-tools`.
+Three commands, as root on the Pi (with the RGB-Pi 2 on HDMI0 and the CRT
+connected):
 
-1. **Bundle libs** (once):
-   `sh deploy/replayos/fix_bundle_libs.sh /opt/rgbpi_mediaplayer`
-2. **EDID override**:
-   ```
-   python3 build_edid.py /sys/class/drm/card1-HDMI-A-1/edid /lib/firmware/edid/mortaca_240p.bin
-   ```
-   Append to the single line of `/boot/firmware/cmdline.txt`:
-   `drm.edid_firmware=HDMI-A-1:edid/mortaca_240p.bin` — then reboot and check
-   `cat /sys/class/drm/card1-HDMI-A-1/modes` starts with `2560x240` and also
-   lists `2560x288`.
-3. **Launcher**: copy `replay_launch.sh` to `/opt/rgbpi_mediaplayer/` (it
-   stops replay.service, exports the display/audio/lib environment, runs the
-   csync watchdog, starts the player, restarts RePlay on exit).
+```sh
+apt-get install -y git && git clone --depth 1 https://github.com/thecyril/rgbpi_mediaplayer.git /opt/rgbpi_mediaplayer
+/opt/rgbpi_mediaplayer/deploy/replayos/install.sh
+reboot
+```
+
+Then select **"audio_video_test"** in RePlay's Extra menu to start the player.
+`install.sh` is idempotent (safe to re-run after a `git pull`; never touches
+`state/`). It installs the apt dependencies, fixes the bundle libs, builds the
+EDID override from the dongle's own EDID and wires it into `cmdline.txt`,
+installs the launcher, compiles the stub core and patches `cores.cfg`, and
+seeds the HDMI audio preference.
+
+### What the installer does (manual reference)
+
+1. **Bundle libs**: `fix_bundle_libs.sh` — SONAME symlinks for the bundled
+   mpv, minus the host-shadowing core libs, bundled libasound disabled.
+2. **EDID override**: `build_edid.py <connector edid> /lib/firmware/edid/…`
+   plus `drm.edid_firmware=HDMI-A-1:edid/…` appended to the single line of
+   `/boot/firmware/cmdline.txt`. After reboot,
+   `cat /sys/class/drm/card1-HDMI-A-1/modes` must list `2560x240` (first) and
+   `2560x288`.
+3. **Launcher**: `replay_launch.sh` at the app root (stops replay.service,
+   exports the display/audio/lib environment, runs the csync watchdog, starts
+   the player, restarts RePlay on exit). Geometry/env tuning lives at the top
+   (`DVDPLAYER_DISPLAY_W/H`, `DVDPLAYER_MPV_DRM_MODE(_PAL)`,
+   `DVDPLAYER_DRM_CONNECTOR`, `DVDPLAYER_HDMI_ALSA_DEVICE`).
 4. **RePlay menu entry** (config-only hijack, no binary patching): RePlay's
    `game_launcher` maps Extra entries to cores by hardcoded name; only
    `pibench.lr` and `audio_video_test.lr` map to cores, and `.sh` entries are
-   blocked ("FORBIDDEN!!!"). But the name→.so mapping goes through
-   `/opt/replay/cores/cores.cfg`, which is editable:
-   ```
-   gcc -O2 -shared -fPIC -o rgbpi_mediaplayer_libretro.so rgbpi_mediaplayer_libretro.c
-   cp rgbpi_mediaplayer_libretro.so /opt/replay/cores/
-   cp /opt/replay/cores/cores.cfg /opt/replay/cores/cores.cfg.orig
-   # edit cores.cfg: point the [avtest] section's low/mid/hi at
-   # "rgbpi_mediaplayer_libretro.so"
-   ```
-   The Extra menu entry named "audio_video_test" then launches the player
-   (the label is the hardcoded filename; renaming it would require patching
-   the replay binary). Revert = restore `cores.cfg.orig`.
-5. **Player settings**: SETTINGS → AUDIO OUTPUT → **HDMI (RGB-PI 2)**.
-6. Optional geometry/env tuning lives at the top of `replay_launch.sh`
-   (`DVDPLAYER_DISPLAY_W/H`, `DVDPLAYER_MPV_DRM_MODE`,
-   `DVDPLAYER_MPV_DRM_MODE_PAL`, `DVDPLAYER_DRM_CONNECTOR`).
+   blocked ("FORBIDDEN!!!"). The name→.so mapping goes through
+   `/opt/replay/cores/cores.cfg` (editable): the stub core
+   (`rgbpi_mediaplayer_libretro.c`, compiled on-Pi) is wired into the
+   `[avtest]` section. The menu label stays "audio_video_test" (it is the
+   hardcoded filename; renaming would require patching the replay binary).
+   Revert = restore `cores.cfg.orig`.
+5. **Audio**: fresh installs are seeded with `audio_output=hdmi`; existing
+   installs keep their choice (SETTINGS → AUDIO OUTPUT → **HDMI (RGB-PI 2)**).
 
 ## Diagnostics
 
