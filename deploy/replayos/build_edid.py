@@ -54,13 +54,38 @@ def build_dtd(clk, hact, hso_start, hso_end, htot, vact, vso_start, vso_end, vto
     return b
 
 
+# Monitor-name prefixes of known RGB-Pi DAC EDIDs (the same list the replay
+# binary uses for DAC detection, plus the mortaca custom EDIDs). Refusing
+# anything else prevents wiring a 15 kHz override for a plain TV/monitor
+# plugged into HDMI0 — which would leave that display unable to sync at boot.
+KNOWN_NAMES = ("MORTACA", "VGA DISP", "HDMI-VGA", "TV DISP", "LRTX", "RPI-DPI")
+
+
+def _monitor_name(d: bytes) -> str:
+    for off in (54, 72, 90, 108):
+        b = d[off : off + 18]
+        if b[0] == 0 and b[1] == 0 and b[3] == 0xFC:
+            return b[5:18].decode("ascii", "replace").strip()
+    return ""
+
+
 def main():
-    if len(sys.argv) != 3:
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    force = "--force" in sys.argv
+    if len(args) != 2:
         sys.exit(__doc__)
-    src, dst = sys.argv[1], sys.argv[2]
+    src, dst = args
     d = bytearray(open(src, "rb").read())
     if len(d) < 128 or d[:2] != b"\x00\xff":
         sys.exit("source does not look like an EDID")
+    name = _monitor_name(d)
+    if not force and not any(name.upper().startswith(k) for k in KNOWN_NAMES):
+        sys.exit(
+            f"EDID monitor name is {name!r} — not a known RGB-Pi DAC.\n"
+            "Is the RGB-Pi 2 really plugged into HDMI0? Building a 15 kHz\n"
+            "override for a regular display would leave it unable to sync.\n"
+            "Re-run with --force to override."
+        )
 
     # DTD1 @54 (preferred) and DTD2 @72; descriptors @90/@108 (range/name) kept.
     d[54:72] = build_dtd(5208, 2560, 2664, 2910, 3326, 240, 242, 245, 261)

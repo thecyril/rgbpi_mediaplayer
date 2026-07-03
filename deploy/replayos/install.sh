@@ -56,12 +56,31 @@ if [ "${1:-}" = "--check" ]; then
     exit 0
 fi
 
-[ -e /opt/replay/replay ] || echo "WARNING: /opt/replay/replay not found — is this RePlayOS? Continuing anyway."
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+if [ ! -e /opt/replay/replay ] && [ "$FORCE" != 1 ]; then
+    die "/opt/replay/replay not found — this does not look like RePlayOS.
+       Running elsewhere would wire a 15 kHz EDID into cmdline.txt and break
+       a normal display. Re-run with --force only if you know what you do."
+fi
 
 say "1/7 apt dependencies"
-apt-get update -qq || echo "WARNING: apt-get update failed (offline?), trying install anyway"
-apt-get install -y --no-install-recommends python3-pygame python3-requests i2c-tools gcc >/dev/null
-echo "ok"
+# Appliance OS: never upgrade anything. Only touch apt when a package is
+# actually missing, and even then forbid upgrades of what is already there
+# (--no-upgrade fails loudly instead of silently bumping system libs — a
+# previous kernel bump through apt is what renumbered the i2c buses...).
+MISSING=""
+for pkg in python3-pygame python3-requests i2c-tools gcc; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+done
+if [ -n "$MISSING" ]; then
+    echo "installing:$MISSING"
+    apt-get update -qq
+    # shellcheck disable=SC2086
+    apt-get install -y --no-upgrade --no-install-recommends $MISSING >/dev/null
+else
+    echo "all present — apt untouched"
+fi
 
 say "2/7 app files -> $APP_TARGET"
 if [ "$REPO_DIR" = "$APP_TARGET" ]; then
