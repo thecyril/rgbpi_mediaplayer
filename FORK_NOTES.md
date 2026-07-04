@@ -1,5 +1,9 @@
 # Fork notes — `thecyril/rgbpi_mediaplayer`
 
+> These notes document the **RGB-Pi OS 4** (bullseye) deployment. For
+> **RePlayOS** (RGB-Pi 2 HDMI DAC), see `deploy/replayos/README.md` — paths,
+> display pipeline and audio routing differ substantially.
+
 Living document. Track everything this fork carries on top of
 [`joeblack2k/rgbpi_mediaplayer`](https://github.com/joeblack2k/rgbpi_mediaplayer) — why each change exists, what is upstream-pending vs. local-only, and how to operate the dev workflow.
 
@@ -356,9 +360,9 @@ Some setup steps had to be done in-place on the Pi (no Python code involved). Th
 - `apt-get install -y --no-install-recommends libdvdcss2` — CSS decryption for **encrypted commercial DVDs**. libdvdread (used by both `lsdvd` and mpv) dlopen's `libdvdcss.so.2` at runtime; without it lsdvd warns "No css library" and mpv can read the title list but **cannot decrypt the movie's VOBs** — so `dvd://N` plays only the (unencrypted) menu, which looks like "the menu appears but nothing else plays". Installing libdvdcss fixes playback of encrypted discs. Targeted install only.
 - `state/plex_state.json` — written by the player after a PIN link, sometimes records a `plex.direct` URI for a stale machine identifier (Plex.tv keeps resolving old MAC-style server IDs in its `/api/v2/resources` response). When that happens, hand-edit the file to set:
   ```json
-  "server_uri": "http://192.168.1.3:32400"
+  "server_uri": "http://<your-plex-server-lan-ip>:32400"
   ```
-  pointing at the current LAN IP of the active Plex server (machine identifier `cfd904f5…` for this setup).
+  pointing at the current LAN IP of your active Plex server.
 - `/etc/asound.conf` — bypass-EQ base config (`pcm.!default → plug → sysdefault:0`) **plus** the `dolby51` device used for optical 5.1 (a52 software AC3 → UT23). Backup of the pre-5.1 state: `/etc/asound.conf.backup-pre-a52`. The earlier equaliser config (`/etc/asound.conf.backup-pre-godot-fix`) caused xruns on the kernel-6.1 ALSA stack and was reverted.
 - **Optical 5.1 audio setup** (mandatory for the OPTICAL 5.1 output mode; full walkthrough in `rgbpi-5.1-dolby-digital-audio-guide.md`):
   - `apt-get install -y --no-install-recommends libasound2-plugins:arm64` — the `a52` ALSA plugin shipped only as armhf (32-bit) on this image, unusable by the arm64 mpv/Kodi. **Targeted install only — never `apt upgrade`** (that broke the kernel once).

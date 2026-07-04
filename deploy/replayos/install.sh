@@ -235,7 +235,7 @@ say "7/8 csync watchdog service (CRT sync maintenance during RePlay sessions)"
 # can drift into a marginal sync state later (status 0x61 != 0xff -> visible
 # shimmer). This always-on watchdog re-latches it; the player launcher pauses
 # it during player sessions (it runs its own).
-install -m 0755 "$APP_TARGET/deploy/replayos/csync_watchdog.sh" "$APP_TARGET/deploy/replayos/csync_watchdog.sh" 2>/dev/null || true
+chmod 0755 "$APP_TARGET/deploy/replayos/csync_watchdog.sh"
 cp "$APP_TARGET/deploy/replayos/rgbpi-csync.service" /etc/systemd/system/rgbpi-csync.service
 systemctl daemon-reload
 systemctl enable rgbpi-csync >/dev/null 2>&1

@@ -605,9 +605,10 @@ def _desired_output_mode(
 
 
 def _mpv_drm_mode_value(target_mode: str) -> str:
-    # RePlayOS + RGB-Pi 2 (HDMI CH7101 DAC): the CRT is 15 kHz-only and
-    # vc4-hdmi rejects pixel clocks under ~31 MHz, so the classic narrow
-    # 720x480i/720x576i modes don't exist there — playback must go to the
+    # RePlayOS + RGB-Pi 2 (HDMI CH7101 DAC): the CRT is 15 kHz-only, and at
+    # 15 kHz the classic narrow 720-wide modes need pixel clocks (13.5 MHz)
+    # below the HDMI TMDS minimum (25 MHz) / the DAC's lock range, so they
+    # don't exist there — playback must go to the
     # wide super-resolution mode instead (same timing RePlay's UI uses) and
     # mpv scales the content into it. DVDPLAYER_MPV_DRM_MODE selects that
     # output mode (e.g. "2560x240"); unset = legacy RGB-Pi OS4 behaviour.

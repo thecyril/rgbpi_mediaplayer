@@ -10,8 +10,11 @@ Raspberry Pi 4 + Sony PVM-14M4E.
 
 The RGB-Pi 2 is a *transparent* HDMI→RGB DAC: **no scaler**. A 15 kHz CRT can
 only ever display ~15.7 kHz horizontal timings, so every mode sent to it must
-be a wide "super-resolution" 15 kHz mode (vc4-hdmi refuses pixel clocks under
-~31 MHz, hence the width). RePlay itself never uses the EDID mode list — it
+be a wide "super-resolution" 15 kHz mode: a native 320x240 raster would need a
+~6.4 MHz pixel clock, far below the HDMI TMDS minimum (25 MHz) and the DAC's
+lock range — widening to 2560 pixels keeps the clock at a comfortable 52 MHz.
+(vc4-hdmi itself enforces no minimum clock, only even horizontal timings on
+Pi 4.) RePlay itself never uses the EDID mode list — it
 fabricates its own USERDEF 15 kHz modes. Any other client (SDL, mpv) picks
 modes from the connector list, which is why a custom EDID is required.
 
@@ -162,7 +165,8 @@ apt-get update && apt-get install -y git && git clone --depth 1 https://github.c
 reboot
 ```
 
-After the reboot, verify everything (9 checks: modes, menu entry, DAC, audio):
+After the reboot, verify everything (16 checks: 15 kHz safety gates, live
+output frequency, menu entry, mpv/bundle health, watchdog, DAC, audio):
 
 ```sh
 /opt/rgbpi_mediaplayer/deploy/replayos/install.sh --check
@@ -190,8 +194,13 @@ renumber the DDC buses).
 3. **Launcher**: `replay_launch.sh` at the app root (stops replay.service,
    exports the display/audio/lib environment, runs the csync watchdog, starts
    the player, restarts RePlay on exit). Geometry/env tuning lives at the top
-   (`DVDPLAYER_DISPLAY_W/H`, `DVDPLAYER_MPV_DRM_MODE(_PAL)`,
-   `DVDPLAYER_DRM_CONNECTOR`, `DVDPLAYER_HDMI_ALSA_DEVICE`).
+   (`DVDPLAYER_DISPLAY_W/H` UI size, `DVDPLAYER_MPV_DRM_MODE` playback mode,
+   `DVDPLAYER_MPV_DRM_MODE_PAL` PAL-content mode (+ optional
+   `DVDPLAYER_MPV_DRM_MODE_PAL_GEOM` when selecting by index),
+   `DVDPLAYER_DRM_CONNECTOR`, `DVDPLAYER_RUNTIME_LIBS=mpv-only` lib isolation,
+   `DVDPLAYER_HDMI_ALSA_DEVICE` for the in-app HDMI audio output, and
+   `DVDPLAYER_ALSA_DEVICE` as a safety net so the legacy "jack" output also
+   lands on the HDMI card).
 4. **RePlay main-menu entry** (config-only hijack, no binary patching):
    "Alpha Player" is a first-class main-menu system in RePlay — its tile
    (shown when `view_player="true"`, i.e. SETTINGS → VIEW → SHOW ALPHA
@@ -202,7 +211,7 @@ renumber the DDC buses).
    on-Pi) and drops a 0-byte `MEDIA PLAYER.mkv` launcher file in the folder —
    only its name shows in the list, and the stub ignores the path and fires
    `replay_launch.sh` instead. Revert = restore `cores.cfg.orig`.
-   (Alternative Extra-menu route, same idea: `.sh` entries are blocked
+   (Legacy alternative — Extra-menu route, same idea: `.sh` entries are blocked
    ("FORBIDDEN!!!") and `.lr` names are hardcoded, but the stock
    `audio_video_test.lr` maps to `get_core("avtest")` whose `[avtest]`
    section can be pointed at the stub the same way.)
