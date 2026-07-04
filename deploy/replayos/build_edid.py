@@ -69,6 +69,39 @@ def _monitor_name(d: bytes) -> str:
     return ""
 
 
+def _neutralize_cea(ext: bytes):
+    """Strip every video mode from a CEA-861 extension, keep audio.
+
+    Returns a rebuilt 128-byte block with all detailed timings and Video Data
+    Blocks (VICs) removed but Audio/Speaker/Vendor data blocks preserved (so
+    the sink still advertises HDMI audio), or ``None`` if ``ext`` is not a CEA
+    block. Native-DTD count is zeroed; the base-block header keeps the
+    underscan / basic-audio / YCbCr flags.
+    """
+    if len(ext) < 128 or ext[0] != 0x02:
+        return None
+    dtd_off = ext[2]
+    out = bytearray(128)
+    out[0] = 0x02
+    out[1] = ext[1]  # revision
+    out[3] = ext[3] & 0xF0  # keep flags, native-DTD count nibble -> 0
+    w = 4
+    if 4 <= dtd_off <= 127:
+        p = 4
+        while p < dtd_off:
+            length = ext[p] & 0x1F
+            tag = ext[p] >> 5
+            block = ext[p : p + 1 + length]
+            p += 1 + length
+            if tag == 2:  # Video Data Block (VIC list) -> drop
+                continue
+            out[w : w + len(block)] = block  # audio(1)/vendor(3)/speaker(4)/ext(7)
+            w += len(block)
+    out[2] = w  # DTD offset = end of data blocks; no detailed timings follow
+    out[127] = (256 - sum(out[0:127])) & 0xFF
+    return out
+
+
 def main():
     args = [a for a in sys.argv[1:] if a != "--force"]
     force = "--force" in sys.argv
@@ -87,10 +120,44 @@ def main():
             "Re-run with --force to override."
         )
 
-    # DTD1 @54 (preferred) and DTD2 @72; descriptors @90/@108 (range/name) kept.
+    # --- 15 kHz ONLY -------------------------------------------------------
+    # A 15 kHz CRT can be DAMAGED by a >15.7 kHz horizontal signal. So the
+    # override must expose NOTHING but the two wide 15 kHz modes — every other
+    # timing the stock EDID advertised (640x480, 1024x768, 1280x720, 1080p...)
+    # is a mode a client could pick and send to the tube. We strip them all:
+    #   - established timings (bytes 35-37) -> 0
+    #   - the 8 standard timings (bytes 38-53) -> unused (0x01 0x01)
+    #   - both base detailed timings (54, 72) -> our 2560x240 / 2560x288
+    #   - descriptor 3 (90) -> display range limits clamped to 15 kHz, so even
+    #     a hand-rolled mode is out of range
+    #   - descriptor 4 (108) -> keep the monitor name (DAC detection)
+    #   - the CEA extension video modes (VICs + its detailed timings) removed,
+    #     audio data blocks preserved so HDMI audio still works
+    d[35] = d[36] = d[37] = 0x00
+    for i in range(38, 54, 2):
+        d[i], d[i + 1] = 0x01, 0x01
     d[54:72] = build_dtd(5208, 2560, 2664, 2910, 3326, 240, 242, 245, 261)
     d[72:90] = build_dtd(5208, 2560, 2664, 2910, 3326, 288, 290, 293, 313)
+    # Display range limits (tag 0xFD): V 47-62 Hz, H 15-16 kHz, max clock 60 MHz.
+    d[90:108] = bytes(
+        [0x00, 0x00, 0x00, 0xFD, 0x00, 47, 62, 15, 16, 6, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20]
+    )
     d[127] = (256 - sum(d[0:127])) & 0xFF
+
+    if d[126] >= 1 and len(d) >= 256:
+        cleaned = _neutralize_cea(d[128:256])
+        if cleaned is not None:
+            d[128:256] = cleaned
+            d = d[:256]  # keep exactly one extension
+            d[126] = 1
+        else:
+            d = d[:128]
+            d[126] = 0
+            d[127] = (256 - sum(d[0:127])) & 0xFF
+    else:
+        d = d[:128]
+        d[126] = 0
+        d[127] = (256 - sum(d[0:127])) & 0xFF
 
     open(dst, "wb").write(d)
     for off, label in ((54, "DTD1"), (72, "DTD2")):

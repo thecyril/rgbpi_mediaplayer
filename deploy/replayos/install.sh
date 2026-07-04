@@ -16,7 +16,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 EDID_DIR="/lib/firmware/edid"
 CMDLINE="/boot/firmware/cmdline.txt"
+CONFIG_TXT="/boot/firmware/config.txt"
 CORES_CFG="/opt/replay/cores/cores.cfg"
+# Firmware early-boot HDMI timing: 1920x240 @ 39.15 MHz / 2500 total = 15.66 kHz
+# H, 60 Hz V. Native 1920 width (the firmware clamps the boot framebuffer to
+# 1920) so the scanned raster equals the framebuffer — simplefb=1920x240 in
+# dmesg is direct proof of the 15.66 kHz output.
+FW_HDMI_TIMINGS="1920 0 80 200 300 240 0 3 3 15 0 0 0 60 0 39150000 1"
 
 say() { printf '\n=== %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -35,6 +41,16 @@ if [ "${1:-}" = "--check" ]; then
     modes="$(cat /sys/class/drm/card*-HDMI-A-1/modes 2>/dev/null || true)"
     check "EDID mode 2560x240 (UI / 60 Hz)"          sh -c "echo '$modes' | grep -q 2560x240"
     check "EDID mode 2560x288 (PAL / 50 Hz)"          sh -c "echo '$modes' | grep -q 2560x288"
+    # SAFETY: the kernel must expose NOTHING but the two 15 kHz modes — any
+    # other mode is a >15.7 kHz signal a client could send to the CRT.
+    hi="$(echo "$modes" | grep -vE '^(2560x240|2560x288)?$' | grep -v '^$' || true)"
+    check "kernel exposes ONLY 15 kHz modes"          sh -c "test -z \"$hi\""
+    [ -n "$hi" ] && printf '     !! extra modes present: %s\n' "$(echo "$hi" | tr '\n' ' ')"
+    # SAFETY: the firmware early boot must be forced to 15 kHz too.
+    check "firmware boot forced to 15 kHz (config.txt)" grep -q '15 kHz CRT SAFETY' "$CONFIG_TXT"
+    fbmode="$(dmesg 2>/dev/null | grep -oE 'simple-framebuffer.*mode=[0-9]+x[0-9]+' | grep -oE '[0-9]+x[0-9]+' | tail -1)"
+    check "firmware boot framebuffer = 1920x240"      sh -c "test '$fbmode' = '1920x240'"
+    [ -n "$fbmode" ] && [ "$fbmode" != "1920x240" ] && printf '     !! firmware boot mode is %s (expected 1920x240)\n' "$fbmode"
     check "cmdline.txt EDID override"                 grep -q 'drm\.edid_firmware=' "$CMDLINE"
     check "launcher installed"                        test -x "$APP_TARGET/replay_launch.sh"
     check "stub core loads (libretro API)"            python3 -c "import ctypes; assert ctypes.CDLL('/opt/replay/cores/rgbpi_mediaplayer_libretro.so').retro_api_version()==1"
@@ -106,24 +122,54 @@ say "4/7 launcher"
 install -m 0755 "$APP_TARGET/deploy/replayos/replay_launch.sh" "$APP_TARGET/replay_launch.sh"
 echo "ok: $APP_TARGET/replay_launch.sh"
 
-say "5/7 EDID firmware override (wide 15 kHz modes)"
-EDID_SRC=""
-for f in /sys/class/drm/card*-HDMI-A-1/edid; do
-    # sysfs attributes stat as size 0 — probe by actually reading.
-    if [ -n "$(head -c 8 "$f" 2>/dev/null | tr -d '\0')" ]; then EDID_SRC="$f"; break; fi
-done
-[ -n "$EDID_SRC" ] || die "no EDID on HDMI-A-1 — is the RGB-Pi 2 plugged into HDMI0?"
-# Reuse the filename already referenced in cmdline.txt (idempotent), else add one.
+say "5/7 15 kHz display safety (EDID override + firmware boot timing)"
+# --- 5a: cache the STOCK EDID so re-runs never re-derive from our own
+# override (once drm.edid_firmware is active, /sys serves the modified EDID).
+STOCK_EDID="$APP_TARGET/state/.stock_edid.bin"
+mkdir -p "$APP_TARGET/state"
+if [ ! -s "$STOCK_EDID" ]; then
+    for f in /sys/class/drm/card*-HDMI-A-1/edid; do
+        # sysfs attributes stat as size 0 — probe by actually reading.
+        if [ -n "$(head -c 8 "$f" 2>/dev/null | tr -d '\0')" ]; then
+            cat "$f" > "$STOCK_EDID"; break
+        fi
+    done
+fi
+[ -s "$STOCK_EDID" ] || die "no EDID on HDMI-A-1 — is the RGB-Pi 2 plugged into HDMI0?"
+# --- 5b: build the 15 kHz-ONLY EDID (strips every >15.7 kHz mode) and wire it in.
 EDID_NAME="$(grep -o 'drm\.edid_firmware=HDMI-A-1:edid/[^ ]*' "$CMDLINE" 2>/dev/null | sed 's|.*edid/||' || true)"
 [ -n "$EDID_NAME" ] || EDID_NAME="rgbpi_crt.bin"
 mkdir -p "$EDID_DIR"
-python3 "$APP_TARGET/deploy/replayos/build_edid.py" "$EDID_SRC" "$EDID_DIR/$EDID_NAME"
+python3 "$APP_TARGET/deploy/replayos/build_edid.py" "$STOCK_EDID" "$EDID_DIR/$EDID_NAME"
 if ! grep -q 'drm\.edid_firmware=' "$CMDLINE"; then
     cp "$CMDLINE" "$CMDLINE.pre-rgbpi-mediaplayer"
     sed -i "s|\$| drm.edid_firmware=HDMI-A-1:edid/$EDID_NAME|" "$CMDLINE"
     echo "cmdline.txt updated (backup: $CMDLINE.pre-rgbpi-mediaplayer)"
 else
     echo "cmdline.txt already set"
+fi
+# --- 5c: force the FIRMWARE early-boot HDMI output to 15 kHz too. Before KMS
+# loads (~5 s) the firmware drives the dongle EEPROM's preferred 1024x768
+# (48 kHz) mode — proven dangerous for a 15 kHz CRT. hdmi_mode=87 +
+# hdmi_timings makes it output our 15.66 kHz raster from power-on instead.
+if ! grep -q '15 kHz CRT SAFETY' "$CONFIG_TXT" 2>/dev/null; then
+    cp "$CONFIG_TXT" "$CONFIG_TXT.pre-rgbpi-mediaplayer"
+    cat >> "$CONFIG_TXT" <<EOF
+
+# --- RGB-Pi 2 / 15 kHz CRT SAFETY -------------------------------------------
+# Force the firmware early-boot HDMI output to a 15 kHz raster so a CRT never
+# sees the dongle EEPROM 1024x768 (48 kHz) mode during the ~5 s before KMS.
+# simplefb=1920x240 in dmesg is direct proof of the 15.66 kHz output. The
+# kernel uses the 2560x240 15 kHz EDID override (drm.edid_firmware).
+hdmi_force_hotplug=1
+hdmi_ignore_edid=0xa5000080
+hdmi_group=2
+hdmi_mode=87
+hdmi_timings=$FW_HDMI_TIMINGS
+EOF
+    echo "config.txt firmware 15 kHz timing added (backup: $CONFIG_TXT.pre-rgbpi-mediaplayer)"
+else
+    echo "config.txt firmware 15 kHz timing already set"
 fi
 
 say "6/7 RePlay main-menu entry (Alpha Player slot)"

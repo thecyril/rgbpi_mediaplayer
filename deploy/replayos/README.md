@@ -58,6 +58,34 @@ timing (52.08 MHz clock, 3326 px total → H = 15.658 kHz):
 the picture displays vertically squashed. 288/313 = the same 92 % active
 height as 240/261 — the classic PAL 288p raster.
 
+### 15 kHz safety — no >15.7 kHz signal ever reaches the CRT
+
+A 15 kHz CRT (PVM/BVM) can be **damaged** by a horizontal signal above
+~15.7 kHz. The setup guarantees every output phase stays at 15.66 kHz:
+
+- **Kernel / userspace (all normal operation).** `build_edid.py` produces a
+  **15 kHz-only** EDID: it strips the stock EDID's established timings, the 8
+  standard timings, and every CEA extension video mode (VICs + detailed
+  timings), keeping only the two 15 kHz DTDs (audio data blocks are
+  preserved). It also clamps the display range-limits descriptor to
+  15-16 kHz. Result: `cat /sys/class/drm/card1-HDMI-A-1/modes` lists **only**
+  `2560x240` and `2560x288` — no client can pick a 31 kHz+ mode because none
+  exist. RePlay makes its own 15 kHz USERDEF modes and, with a valid EDID,
+  never hits its 640x480 fallback.
+- **Firmware early boot (~5 s before KMS).** Left alone the firmware drives
+  the dongle EEPROM's preferred **1024x768 @ 48 kHz** (verified: the boot
+  `simple-framebuffer` was 1024x768, and changing `hdmi_timings` changed it —
+  so it is a real HDMI output, not just a RAM buffer). `config.txt`
+  `hdmi_mode=87` + `hdmi_timings` force a **1920x240 @ 39.15 MHz** raster
+  (H = 15.66 kHz) from power-on. The width is native (the firmware clamps the
+  boot framebuffer to 1920), so the scanned raster equals the framebuffer with
+  no scaling — `dmesg | grep simple-framebuffer` showing **1920x240** is
+  direct proof of the 15.66 kHz output.
+
+`install.sh --check` verifies all three: only-15 kHz kernel modes, the
+config.txt firmware block, and the 1920x240 boot framebuffer. Run it after
+every reboot before trusting a new CRT.
+
 mpv 0.32 gotchas: `--drm-mode=WxH@R` needs an *exact* refresh match ("@50"
 never matches 50.03 Hz) → modes are selected by unique name (`2560x288`) or by
 index; `--vo=gpu` segfaults with the bundled bullseye Mesa (GBM/V3D) → stick
