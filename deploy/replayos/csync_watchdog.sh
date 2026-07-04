@@ -29,31 +29,56 @@ while [ -z "$BUS" ]; do
     BUS="$(find_bus || true)"
 done
 
-# Follow the user's RePlay csync setting: 0 = AND (0x06), 1 = XOR (0x0C),
-# 2 = separated H/V (0x00).
-VAL=0x06
+# Follow the user's RePlay csync setting, RE-READ at every apply so a live
+# menu change (AND/XOR/separated) is honoured immediately:
+# 0 = AND (0x06), 1 = XOR (0x0C), 2 = separated H/V (0x00).
 CFG=/media/sd/config/replay.cfg
-if [ -r "$CFG" ]; then
-    case "$(sed -n 's/^video_crt_csync_mode *= *"\([0-9]\)".*/\1/p' "$CFG" | head -1)" in
-        1) VAL=0x0C ;;
-        2) VAL=0x00 ;;
-    esac
-fi
+csync_val() {
+    v=0x06
+    if [ -r "$CFG" ]; then
+        case "$(sed -n 's/^video_crt_csync_mode *= *"\([0-9]\)".*/\1/p' "$CFG" | head -1)" in
+            1) v=0x0C ;;
+            2) v=0x00 ;;
+        esac
+    fi
+    echo "$v"
+}
 
 apply() {
+    VAL="$(csync_val)"
     i2cset -y -a "$BUS" 0x78 0x00 0x04 2>/dev/null
     i2cset -y -a "$BUS" 0x78 0xB5 "$VAL" 2>/dev/null
     i2cset -y -a "$BUS" 0x78 0x00 0x00 2>/dev/null
 }
 
-logger -t rgbpi-csync "watchdog started (bus $BUS, csync $VAL)"
+current_mode() {
+    grep 'mode:' /sys/kernel/debug/dri/*/state 2>/dev/null | grep -v '""' | head -1
+}
+
+logger -t rgbpi-csync "watchdog started (bus $BUS)"
+LAST_MODE="$(current_mode)"
+SETTLE=0
 while :; do
+    # Modeset-aware backoff: right after a mode change RePlay performs its
+    # OWN page-select + csync write sequence. Touching the bus then could
+    # interleave with it (the chip's page register is global), so leave the
+    # bus alone for a couple of cycles and verify afterwards.
+    m="$(current_mode)"
+    if [ "$m" != "$LAST_MODE" ]; then
+        LAST_MODE="$m"
+        SETTLE=2
+    fi
+    if [ "$SETTLE" -gt 0 ]; then
+        SETTLE=$((SETTLE - 1))
+        sleep 1
+        continue
+    fi
     i2cset -y -a "$BUS" 0x78 0x00 0x00 2>/dev/null
     v="$(i2cget -y -a "$BUS" 0x78 0x61 2>/dev/null)"
     if [ -n "$v" ] && [ "$v" != "0xff" ]; then
         # Mid-modeset blips read 0xef for ~300 ms; give the link a moment to
         # settle, then re-latch. The write is idempotent (same value RePlay
-        # itself uses), so racing RePlay's own init write is harmless.
+        # itself uses).
         sleep 0.5
         apply
         logger -t rgbpi-csync "re-applied csync (0x61 was $v)"
