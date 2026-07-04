@@ -6,6 +6,11 @@ CRT** through the **RGB-Pi 2** HDMI dongle (Chrontel CH7101 DAC + composite
 sync combiner). Everything below was reverse-engineered and validated on a
 Raspberry Pi 4 + Sony PVM-14M4E.
 
+> **RePlay binary internals** (i2c/DAC registers, the menu & core-option
+> system, `should_show_core_option`, the anti-tamper, symbol addresses) are
+> documented separately in [`REPLAY-INTERNALS.md`](REPLAY-INTERNALS.md) — the
+> reverse-engineering reference behind every patch here.
+
 ## How it works (the short version)
 
 The RGB-Pi 2 is a *transparent* HDMI→RGB DAC: **no scaler**. A 15 kHz CRT can
