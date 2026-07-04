@@ -38,6 +38,11 @@ if [ "${1:-}" = "--check" ]; then
     check "cmdline.txt EDID override"                 grep -q 'drm\.edid_firmware=' "$CMDLINE"
     check "launcher installed"                        test -x "$APP_TARGET/replay_launch.sh"
     check "stub core loads (libretro API)"            python3 -c "import ctypes; assert ctypes.CDLL('/opt/replay/cores/rgbpi_mediaplayer_libretro.so').retro_api_version()==1"
+    # Loads mpv with the exact library environment the player gives it —
+    # catches any bundle-lib regression (missing SONAME, host/bundle mixing).
+    RT="$APP_TARGET/runtime/linux-arm64-rootfs"
+    MPV_LDP="$RT/lib/aarch64-linux-gnu:$RT/usr/lib/aarch64-linux-gnu:$RT/usr/lib/aarch64-linux-gnu/pulseaudio:$RT/usr/lib/aarch64-linux-gnu/samba:$APP_TARGET/lib"
+    check "bundled mpv loads (bundle libs)"           env LD_LIBRARY_PATH="$MPV_LDP" "$APP_TARGET/bin/mpv" --version
     check "cores.cfg [alpha_player] -> stub"          sh -c "grep -A3 '\[alpha_player\]' '$CORES_CFG' | grep -q rgbpi_mediaplayer_libretro"
     check "Alpha Player launcher entry"               test -e "/media/sd/roms/alpha_player/MEDIA PLAYER.mkv"
     check "Alpha Player tile enabled (view_player)"   grep -q "view_player *= *\"true\"" /media/sd/config/replay.cfg
