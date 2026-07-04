@@ -11,12 +11,23 @@
 # The player launcher (replay_launch.sh) stops this service for the duration
 # of a player session (it runs its own, faster watchdog keyed to mpv
 # modesets) and restarts it on exit.
-BUS=""
-for dev in /dev/i2c-*; do
-    b="${dev#/dev/i2c-}"
-    i2cget -y -a "$b" 0x78 >/dev/null 2>&1 && { BUS="$b"; break; }
+find_bus() {
+    for dev in /dev/i2c-*; do
+        [ -e "$dev" ] || continue
+        b="${dev#/dev/i2c-}"
+        i2cget -y -a "$b" 0x78 >/dev/null 2>&1 && { echo "$b"; return 0; }
+    done
+    return 1
+}
+# At early boot i2c-dev may not be loaded yet and /media/sd may not be
+# mounted — keep retrying instead of exiting (systemd would rate-limit us).
+modprobe -q i2c-dev 2>/dev/null
+BUS="$(find_bus || true)"
+while [ -z "$BUS" ]; do
+    sleep 5
+    modprobe -q i2c-dev 2>/dev/null
+    BUS="$(find_bus || true)"
 done
-[ -n "$BUS" ] || BUS=20
 
 # Follow the user's RePlay csync setting: 0 = AND (0x06), 1 = XOR (0x0C),
 # 2 = separated H/V (0x00).

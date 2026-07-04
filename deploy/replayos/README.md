@@ -86,6 +86,55 @@ A 15 kHz CRT (PVM/BVM) can be **damaged** by a horizontal signal above
 config.txt firmware block, and the 1920x240 boot framebuffer. Run it after
 every reboot before trusting a new CRT.
 
+**Residual risk (documented for honesty).** If the EDID override file under
+`/lib/firmware/edid/` disappears (RePlayOS reflash, SD corruption), the kernel
+falls back to the dongle EEPROM's stock EDID and the boot console could output
+~48 kHz for the few seconds before RePlay takes over with its own 15 kHz mode.
+The definitive close is to flash the 15 kHz-only EDID into the dongle EEPROM
+itself (RePlayOS ships `edid_rw.py` in the Extra tools; keep a backup of the
+stock EDID first — `install.sh` already caches one at
+`state/.stock_edid.bin`). Until then: after any OS reflash, re-run
+`install.sh` before connecting the CRT.
+
+### Sync maintenance (csync watchdog)
+
+RePlay writes the DAC's csync mode only at its own video init. The CH7101 can
+later drift into a **marginal sync state**: the picture still displays but
+shimmers, and the status register (page 0, reg `0x61`) reads something other
+than the healthy steady `0xff` (e.g. `0x18`, `0xc0`, `0x00`). Rewriting the
+csync mode (page 4, reg `0xB5`) re-latches the output and `0x61` returns to
+`0xff` — measured and reproduced.
+
+Two watchdogs cover every situation, both following the user's RePlay
+`video_crt_csync_mode` setting (0 = AND `0x06`, 1 = XOR `0x0C`,
+2 = separated `0x00`):
+
+- **`rgbpi-csync.service`** (system-wide, always on, installed by
+  `install.sh`): polls `0x61` at 1 Hz and re-applies csync whenever it leaves
+  `0xff`. Survives early boot (retries until the i2c bus and DAC appear) and
+  never gives up (`StartLimitIntervalSec=0`).
+- **The launcher watchdog** (player sessions): faster, keyed to KMS mode-line
+  changes and `0x61` blips (mpv modesets). `replay_launch.sh` stops the
+  system service for the session and restarts it on exit, so exactly one
+  watchdog runs at any time.
+
+The write is the exact operation RePlay performs itself, with the same value —
+racing RePlay's own init is harmless.
+
+### Connecting a new CRT — checklist
+
+1. Full cold power-off first (cables out ~10 s): the dongle is powered from
+   HDMI 5 V and never resets across mere reboots — a cold start clears any
+   accumulated DAC state.
+2. Boot with the CRT connected, then over SSH:
+   `/opt/rgbpi_mediaplayer/deploy/replayos/install.sh --check`
+   — every line must be OK, in particular the three 15 kHz safety gates and
+   "csync watchdog service active".
+3. If the picture ever shimmers: read the DAC status
+   (`i2cset -y -a <bus> 0x78 0x00 0x00; i2cget -y -a <bus> 0x78 0x61`) —
+   anything but `0xff` means sync drift; the watchdog should correct it within
+   ~2 s, and `csync_probe.sh` logs the transitions if you want a trace.
+
 mpv 0.32 gotchas: `--drm-mode=WxH@R` needs an *exact* refresh match ("@50"
 never matches 50.03 Hz) → modes are selected by unique name (`2560x288`) or by
 index; `--vo=gpu` segfaults with the bundled bullseye Mesa (GBM/V3D) → stick

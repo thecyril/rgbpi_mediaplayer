@@ -1,8 +1,11 @@
 [Unit]
 Description=RGB-Pi 2 CH7101 csync watchdog (15 kHz CRT sync maintenance)
-After=multi-user.target
+# No After=multi-user.target here: combined with WantedBy=multi-user.target it
+# creates an ordering paradox systemd may resolve by dropping the start job.
+StartLimitIntervalSec=0
 
 [Service]
+ExecStartPre=-/sbin/modprobe -q i2c-dev
 ExecStart=/opt/rgbpi_mediaplayer/deploy/replayos/csync_watchdog.sh
 Restart=always
 RestartSec=5
