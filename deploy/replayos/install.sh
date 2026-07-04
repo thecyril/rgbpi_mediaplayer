@@ -73,7 +73,13 @@ if [ "${1:-}" = "--check" ]; then
     check "Alpha Player launcher entry"               test -e "/media/sd/roms/alpha_player/MEDIA PLAYER.mkv"
     check "Alpha Player tile enabled (view_player)"   grep -q "view_player *= *\"true\"" /media/sd/config/replay.cfg
     check "vc4-hdmi sound card"                       grep -q vc4hdmi /proc/asound/cards
-    check "csync watchdog service active"             systemctl is-active --quiet rgbpi-csync
+    # During a player session the launcher intentionally pauses the system
+    # service and runs its own watchdog (a subshell of replay_launch.sh).
+    if pgrep -f "[d]vdplayer_python.main" >/dev/null 2>&1; then
+        check "csync watchdog (launcher, player session)" pgrep -f "[r]eplay_launch.sh"
+    else
+        check "csync watchdog service active"         systemctl is-active --quiet rgbpi-csync
+    fi
     modprobe -q i2c-dev 2>/dev/null || true
     dac=""
     for dev in /dev/i2c-*; do
