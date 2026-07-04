@@ -138,9 +138,11 @@ def main():
         d[i], d[i + 1] = 0x01, 0x01
     d[54:72] = build_dtd(5208, 2560, 2664, 2910, 3326, 240, 242, 245, 261)
     d[72:90] = build_dtd(5208, 2560, 2664, 2910, 3326, 288, 290, 293, 313)
-    # Display range limits (tag 0xFD): V 47-62 Hz, H 15-16 kHz, max clock 60 MHz.
+    # Display range limits (tag 0xFD): V 47-62 Hz, H 15-16 kHz, max clock
+    # 60 MHz, byte 10 = 0x01 ("no timing formula" — forbids GTF/CVT mode
+    # inference), then the spec-mandated 0x0A + 0x20 padding.
     d[90:108] = bytes(
-        [0x00, 0x00, 0x00, 0xFD, 0x00, 47, 62, 15, 16, 6, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20]
+        [0x00, 0x00, 0x00, 0xFD, 0x00, 47, 62, 15, 16, 6, 0x01, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20]
     )
     d[127] = (256 - sum(d[0:127])) & 0xFF
 

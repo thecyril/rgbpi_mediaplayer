@@ -94,6 +94,9 @@ csync_watchdog() {
         sleep 0.1
     done
 }
+# The system-wide csync watchdog (rgbpi-csync.service) is paused for the
+# session: this launcher runs its own, faster one keyed to mpv modesets.
+systemctl stop rgbpi-csync 2>/dev/null || true
 csync_watchdog &
 WATCHDOG_PID=$!
 # ------------------------------------------------------------------------------
@@ -102,5 +105,6 @@ cd /opt/rgbpi_mediaplayer || { echo "no app dir"; kill $WATCHDOG_PID; systemctl 
 ./start_rgbpi_dvdplayer_python.sh
 rc=$?
 kill $WATCHDOG_PID 2>/dev/null
+systemctl start rgbpi-csync 2>/dev/null || true
 echo "=== $(date -Iseconds) player exited rc=$rc — relaunching RePlay ==="
 systemctl start replay.service

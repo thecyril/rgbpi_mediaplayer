@@ -63,6 +63,7 @@ if [ "${1:-}" = "--check" ]; then
     check "Alpha Player launcher entry"               test -e "/media/sd/roms/alpha_player/MEDIA PLAYER.mkv"
     check "Alpha Player tile enabled (view_player)"   grep -q "view_player *= *\"true\"" /media/sd/config/replay.cfg
     check "vc4-hdmi sound card"                       grep -q vc4hdmi /proc/asound/cards
+    check "csync watchdog service active"             systemctl is-active --quiet rgbpi-csync
     modprobe -q i2c-dev 2>/dev/null || true
     dac=""
     for dev in /dev/i2c-*; do
@@ -86,7 +87,7 @@ if [ ! -e /opt/replay/replay ] && [ "$FORCE" != 1 ]; then
        a normal display. Re-run with --force only if you know what you do."
 fi
 
-say "1/7 apt dependencies"
+say "1/8 apt dependencies"
 # Appliance OS: never upgrade anything. Only touch apt when a package is
 # actually missing, and even then forbid upgrades of what is already there
 # (--no-upgrade fails loudly instead of silently bumping system libs — a
@@ -104,7 +105,7 @@ else
     echo "all present — apt untouched"
 fi
 
-say "2/7 app files -> $APP_TARGET"
+say "2/8 app files -> $APP_TARGET"
 if [ "$REPO_DIR" = "$APP_TARGET" ]; then
     echo "repo already lives at $APP_TARGET"
 else
@@ -115,14 +116,14 @@ else
     echo "copied from $REPO_DIR"
 fi
 
-say "3/7 bundle libs (SONAME symlinks for mpv, host runtime kept clean)"
+say "3/8 bundle libs (SONAME symlinks for mpv, host runtime kept clean)"
 sh "$APP_TARGET/deploy/replayos/fix_bundle_libs.sh" "$APP_TARGET"
 
-say "4/7 launcher"
+say "4/8 launcher"
 install -m 0755 "$APP_TARGET/deploy/replayos/replay_launch.sh" "$APP_TARGET/replay_launch.sh"
 echo "ok: $APP_TARGET/replay_launch.sh"
 
-say "5/7 15 kHz display safety (EDID override + firmware boot timing)"
+say "5/8 15 kHz display safety (EDID override + firmware boot timing)"
 # --- 5a: cache the STOCK EDID so re-runs never re-derive from our own
 # override (once drm.edid_firmware is active, /sys serves the modified EDID).
 STOCK_EDID="$APP_TARGET/state/.stock_edid.bin"
@@ -172,7 +173,7 @@ else
     echo "config.txt firmware 15 kHz timing already set"
 fi
 
-say "6/7 RePlay main-menu entry (Alpha Player slot)"
+say "6/8 RePlay main-menu entry (Alpha Player slot)"
 gcc -O2 -shared -fPIC -o /opt/replay/cores/rgbpi_mediaplayer_libretro.so \
     "$APP_TARGET/deploy/replayos/rgbpi_mediaplayer_libretro.c"
 [ -f "$CORES_CFG.orig" ] || cp "$CORES_CFG" "$CORES_CFG.orig"
@@ -219,7 +220,19 @@ if ! grep -q 'view_player *= *"true"' /media/sd/config/replay.cfg 2>/dev/null; t
     echo "NOTE: enable the tile in RePlay: SETTINGS -> VIEW -> SHOW ALPHA PLAYER"
 fi
 
-say "7/7 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
+say "7/8 csync watchdog service (CRT sync maintenance during RePlay sessions)"
+# RePlay writes the DAC's csync mode only at its own video init; the CH7101
+# can drift into a marginal sync state later (status 0x61 != 0xff -> visible
+# shimmer). This always-on watchdog re-latches it; the player launcher pauses
+# it during player sessions (it runs its own).
+install -m 0755 "$APP_TARGET/deploy/replayos/csync_watchdog.sh" "$APP_TARGET/deploy/replayos/csync_watchdog.sh" 2>/dev/null || true
+cp "$APP_TARGET/deploy/replayos/rgbpi-csync.service" /etc/systemd/system/rgbpi-csync.service
+systemctl daemon-reload
+systemctl enable rgbpi-csync >/dev/null 2>&1
+systemctl restart rgbpi-csync
+echo "rgbpi-csync.service enabled + started"
+
+say "8/8 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
 PREFS="$APP_TARGET/state/playback_prefs.json"
 if [ -f "$PREFS" ]; then
     echo "existing prefs kept (switch in-app: SETTINGS -> AUDIO OUTPUT -> HDMI)"

@@ -1,0 +1,12 @@
+[Unit]
+Description=RGB-Pi 2 CH7101 csync watchdog (15 kHz CRT sync maintenance)
+After=multi-user.target
+
+[Service]
+ExecStart=/opt/rgbpi_mediaplayer/deploy/replayos/csync_watchdog.sh
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
