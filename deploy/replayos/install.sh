@@ -87,6 +87,24 @@ if [ "${1:-}" = "--check" ]; then
         i2cget -y -a "$b" 0x78 >/dev/null 2>&1 && { dac="$b"; break; }
     done
     check "RGB-Pi 2 DAC answers on i2c (bus ${dac:-?})" test -n "$dac"
+    # Opt-in core-option filters: if enabled, verify the RePlay binary is patched.
+    if [ -f "$APP_TARGET/state/.show_all_core_options" ]; then
+        check "core-option filters revealed (RePlay patched)" \
+            python3 - /opt/replay/replay <<'PY'
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+# should_show_core_option @ 0x2c86e0; patched entry = "mov w0,#1; ret".
+e_phoff = struct.unpack("<Q", d[0x20:0x28])[0]
+sz = struct.unpack("<H", d[0x36:0x38])[0]; n = struct.unpack("<H", d[0x38:0x3a])[0]
+off = None
+for i in range(n):
+    p = d[e_phoff+i*sz:e_phoff+(i+1)*sz]
+    if struct.unpack("<I", p[:4])[0] == 1:
+        o, v, _, fs = struct.unpack("<QQQQ", p[8:40])
+        if v <= 0x2c86e0 < v+fs: off = o + (0x2c86e0 - v)
+assert off is not None and d[off:off+8] == bytes.fromhex("20008052c0035fd6")
+PY
+    fi
     if [ "$ok" = 1 ]; then
         echo; echo "All good — open \"Alpha Player\" in RePlay's main menu and pick MEDIA PLAYER."
     else
@@ -103,7 +121,7 @@ if [ ! -e /opt/replay/replay ] && [ "$FORCE" != 1 ]; then
        a normal display. Re-run with --force only if you know what you do."
 fi
 
-say "1/8 apt dependencies"
+say "1/9 apt dependencies"
 # Appliance OS: never upgrade anything. Only touch apt when a package is
 # actually missing, and even then forbid upgrades of what is already there
 # (--no-upgrade fails loudly instead of silently bumping system libs — a
@@ -121,7 +139,7 @@ else
     echo "all present — apt untouched"
 fi
 
-say "2/8 app files -> $APP_TARGET"
+say "2/9 app files -> $APP_TARGET"
 if [ "$REPO_DIR" = "$APP_TARGET" ]; then
     echo "repo already lives at $APP_TARGET"
 else
@@ -132,14 +150,14 @@ else
     echo "copied from $REPO_DIR"
 fi
 
-say "3/8 bundle libs (SONAME symlinks for mpv, host runtime kept clean)"
+say "3/9 bundle libs (SONAME symlinks for mpv, host runtime kept clean)"
 sh "$APP_TARGET/deploy/replayos/fix_bundle_libs.sh" "$APP_TARGET"
 
-say "4/8 launcher"
+say "4/9 launcher"
 install -m 0755 "$APP_TARGET/deploy/replayos/replay_launch.sh" "$APP_TARGET/replay_launch.sh"
 echo "ok: $APP_TARGET/replay_launch.sh"
 
-say "5/8 15 kHz display safety (EDID override + firmware boot timing)"
+say "5/9 15 kHz display safety (EDID override + firmware boot timing)"
 # --- 5a: cache the STOCK EDID so re-runs never re-derive from our own
 # override (once drm.edid_firmware is active, /sys serves the modified EDID).
 STOCK_EDID="$APP_TARGET/state/.stock_edid.bin"
@@ -189,7 +207,7 @@ else
     echo "config.txt firmware 15 kHz timing already set"
 fi
 
-say "6/8 RePlay main-menu entry (Alpha Player slot)"
+say "6/9 RePlay main-menu entry (Alpha Player slot)"
 gcc -O2 -shared -fPIC -o /opt/replay/cores/rgbpi_mediaplayer_libretro.so \
     "$APP_TARGET/deploy/replayos/rgbpi_mediaplayer_libretro.c"
 [ -f "$CORES_CFG.orig" ] || cp "$CORES_CFG" "$CORES_CFG.orig"
@@ -236,7 +254,7 @@ if ! grep -q 'view_player *= *"true"' /media/sd/config/replay.cfg 2>/dev/null; t
     echo "NOTE: enable the tile in RePlay: SETTINGS -> VIEW -> SHOW ALPHA PLAYER"
 fi
 
-say "7/8 csync watchdog service (CRT sync maintenance during RePlay sessions)"
+say "7/9 csync watchdog service (CRT sync maintenance during RePlay sessions)"
 # RePlay writes the DAC's csync mode only at its own video init; the CH7101
 # can drift into a marginal sync state later (status 0x61 != 0xff -> visible
 # shimmer). This always-on watchdog re-latches it; the player launcher pauses
@@ -248,7 +266,34 @@ systemctl enable rgbpi-csync >/dev/null 2>&1
 systemctl restart rgbpi-csync
 echo "rgbpi-csync.service enabled + started"
 
-say "8/8 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
+say "8/9 CRT core-option filters (opt-in: Blargg NTSC composite/RF/S-Video)"
+# RePlay hides most libretro core options from its in-game menu — including the
+# per-core Blargg NTSC filters. This patch reveals them all (see
+# show_all_core_options.py). It modifies /opt/replay/replay (trips anti-tamper
+# -> RePlay's own csync off, already covered by rgbpi-csync.service), so it is
+# OPT-IN: enabled by the marker file, which survives OS updates in state/.
+# Enable:  touch /opt/rgbpi_mediaplayer/state/.show_all_core_options
+# Disable: rm the marker, then  cp /opt/replay/replay.orig /opt/replay/replay
+FILTER_MARKER="$APP_TARGET/state/.show_all_core_options"
+REPLAY_BIN="/opt/replay/replay"
+if [ -f "$FILTER_MARKER" ] && [ -f "$REPLAY_BIN" ]; then
+    cp -f "$REPLAY_BIN" "$REPLAY_BIN.patch.tmp"
+    if python3 "$APP_TARGET/deploy/replayos/show_all_core_options.py" "$REPLAY_BIN.patch.tmp" | grep -q "patched should_show"; then
+        # We just patched a *stock* binary (the script refuses a non-stock one),
+        # so the live binary is still stock right now -> refresh the backup.
+        cp -f "$REPLAY_BIN" "$REPLAY_BIN.orig"
+        chmod --reference="$REPLAY_BIN" "$REPLAY_BIN.patch.tmp"
+        mv -f "$REPLAY_BIN.patch.tmp" "$REPLAY_BIN"
+        echo "core options revealed (backup: $REPLAY_BIN.orig)"
+    else
+        rm -f "$REPLAY_BIN.patch.tmp"
+        echo "already patched — RePlay binary untouched"
+    fi
+else
+    echo "not enabled (touch $FILTER_MARKER to reveal all core options)"
+fi
+
+say "9/9 default player prefs (audio out = HDMI / RGB-Pi 2 jack)"
 PREFS="$APP_TARGET/state/playback_prefs.json"
 if [ -f "$PREFS" ]; then
     echo "existing prefs kept (switch in-app: SETTINGS -> AUDIO OUTPUT -> HDMI)"

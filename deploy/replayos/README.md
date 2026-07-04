@@ -218,6 +218,38 @@ renumber the DDC buses).
 5. **Audio**: fresh installs are seeded with `audio_output=hdmi`; existing
    installs keep their choice (SETTINGS → AUDIO OUTPUT → **HDMI (RGB-PI 2)**).
 
+## Core-option filters (Blargg NTSC: composite / RF / S-Video) — opt-in
+
+RGB-Pi OS 4 / RetroArch let you pick the per-core **Blargg NTSC filter** to
+emulate a composite / RF / S-Video / RGB cable look. The cores RePlayOS ships
+(snes9x, fceumm, genesis_plus_gx, ...) all support it, but RePlay **hides most
+core options** from its in-game menu (via `should_show_core_option`), so the
+filter is unreachable by default.
+
+`show_all_core_options.py` reveals them: an 8-byte patch that makes
+`should_show_core_option` always return "show", so the in-game **SYSTEM
+SETTINGS** menu lists every core option, live-selectable — exactly like
+RetroArch's own menu. Find **"Blargg NTSC Filter"** (SNES/NES/Genesis) and set
+Composite / S-Video / RGB; it changes live and RePlay remembers it per system.
+
+It is **opt-in** because it patches `/opt/replay/replay`, which trips RePlay's
+anti-tamper (`is_replay_hacked`) — RePlay then stops maintaining the CH7101
+csync itself. That is already covered by `rgbpi-csync.service`, and nothing
+else changes (boot, game launching and stability are unaffected; the patch only
+changes which menu entries are shown). Enable it with a marker file that
+survives OS updates, then re-run the installer:
+
+```sh
+touch /opt/rgbpi_mediaplayer/state/.show_all_core_options
+/opt/rgbpi_mediaplayer/deploy/replayos/install.sh        # applies the patch
+reboot
+```
+
+The stock binary is backed up to `/opt/replay/replay.orig` (revert:
+`cp /opt/replay/replay.orig /opt/replay/replay && reboot`, and `rm` the marker).
+A RePlayOS update restores the stock binary; re-running the installer
+re-applies the patch. `install.sh --check` verifies it when the marker is set.
+
 ## Diagnostics
 
 - `csync_probe.sh` — logs transitions of the CH7101 page0/`0x61` status
