@@ -52,6 +52,16 @@ if [ "${1:-}" = "--check" ]; then
     check "firmware boot framebuffer = 1920x240"      sh -c "test '$fbmode' = '1920x240'"
     [ -n "$fbmode" ] && [ "$fbmode" != "1920x240" ] && printf '     !! firmware boot mode is %s (expected 1920x240)\n' "$fbmode"
     check "cmdline.txt EDID override"                 grep -q 'drm\.edid_firmware=' "$CMDLINE"
+    # GROUND TRUTH: the H-frequency of what is being scanned out RIGHT NOW
+    # (clock/htotal from the live KMS state) — catches ANY misconfiguration,
+    # including RePlay itself being switched to an LCD/31 kHz profile.
+    live="$(grep 'mode:' /sys/kernel/debug/dri/*/state 2>/dev/null | grep -v '\"\"' | head -1)"
+    livekhz="$(echo "$live" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) {clk=$(i+1); htot=$(i+5); break}} END {if (htot>0) printf "%.2f", clk/htot; else print "none"}')"
+    if [ "$livekhz" = "none" ] || [ -z "$livekhz" ]; then
+        printf 'OK   LIVE output: none active (no signal at all)\n'
+    else
+        check "LIVE output H-freq = $livekhz kHz (15-16 kHz)" awk "BEGIN{exit !($livekhz <= 16.05 && $livekhz >= 15.0)}"
+    fi
     check "launcher installed"                        test -x "$APP_TARGET/replay_launch.sh"
     check "stub core loads (libretro API)"            python3 -c "import ctypes; assert ctypes.CDLL('/opt/replay/cores/rgbpi_mediaplayer_libretro.so').retro_api_version()==1"
     # Loads mpv with the exact library environment the player gives it —
