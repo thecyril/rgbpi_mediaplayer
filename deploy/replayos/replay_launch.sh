@@ -85,11 +85,20 @@ csync_watchdog() {
             last="$m"
             continue
         fi
+        # Verify BOTH status (0x61) and mode (0xB5): 0x61=0xff means "locked",
+        # not "right csync mode" — a wrong 0xB5 scrolls the CRT while 0x61 stays
+        # 0xff (seen after the show_all_core_options patch disabled RePlay's own
+        # csync write). Compare case-insensitively (i2cget prints 0x0c, cfg 0x0C).
+        i2cset -y -a "$CSYNC_BUS" 0x78 0x00 0x04 2>/dev/null
+        b5=$(i2cget -y -a "$CSYNC_BUS" 0x78 0xB5 2>/dev/null)
+        i2cset -y -a "$CSYNC_BUS" 0x78 0x00 0x00 2>/dev/null
         v=$(i2cget -y -a "$CSYNC_BUS" 0x78 0x61 2>/dev/null)
-        if [ -n "$v" ] && [ "$v" != "0xff" ]; then
+        want=$(echo "$CSYNC_VAL" | tr 'A-F' 'a-f')
+        if { [ -n "$v" ] && [ "$v" != "0xff" ]; } || \
+           { [ -n "$b5" ] && [ "$(echo "$b5" | tr 'A-F' 'a-f')" != "$want" ]; }; then
             sleep 0.5   # retrain in progress; wait for the link to come back
             csync_apply
-            echo "$(date -Iseconds) csync re-applied after 0x61 blip ($v)"
+            echo "$(date -Iseconds) csync re-applied (0x61=$v 0xB5=$b5 want=$CSYNC_VAL)"
         fi
         sleep 0.1
     done

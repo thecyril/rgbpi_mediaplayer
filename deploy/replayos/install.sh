@@ -87,6 +87,23 @@ if [ "${1:-}" = "--check" ]; then
         i2cget -y -a "$b" 0x78 >/dev/null 2>&1 && { dac="$b"; break; }
     done
     check "RGB-Pi 2 DAC answers on i2c (bus ${dac:-?})" test -n "$dac"
+    # LOAD-BEARING: the csync MODE (page 4, 0xB5) and STATUS (page 0, 0x61)
+    # decide whether the picture holds — a wrong mode scrolls the CRT even at a
+    # correct 15 kHz H-freq. Status 0xff means "locked", NOT "right mode", so
+    # verify both. Desired mode follows replay.cfg video_crt_csync_mode
+    # (0=AND 0x06, 1=XOR 0x0C, 2=separated 0x00).
+    if [ -n "$dac" ]; then
+        want=0x06
+        case "$(sed -n 's/^video_crt_csync_mode *= *"\([0-9]\)".*/\1/p' /media/sd/config/replay.cfg 2>/dev/null | head -1)" in
+            1) want=0x0c ;; 2) want=0x00 ;;
+        esac
+        i2cset -y -a "$dac" 0x78 0x00 0x04 2>/dev/null
+        b5="$(i2cget -y -a "$dac" 0x78 0xB5 2>/dev/null)"
+        i2cset -y -a "$dac" 0x78 0x00 0x00 2>/dev/null
+        s61="$(i2cget -y -a "$dac" 0x78 0x61 2>/dev/null)"
+        check "csync mode 0xB5 = $b5 (want $want)"    sh -c "test \"$(echo $b5 | tr A-F a-f)\" = \"$(echo $want | tr A-F a-f)\""
+        check "csync status 0x61 = $s61 (locked 0xff)" sh -c "test \"$s61\" = \"0xff\""
+    fi
     # Opt-in core-option filters: if enabled, verify the RePlay binary is patched.
     if [ -f "$APP_TARGET/state/.show_all_core_options" ]; then
         check "core-option filters revealed (RePlay patched)" \
