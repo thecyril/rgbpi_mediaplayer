@@ -97,10 +97,20 @@ if [ "${1:-}" = "--check" ]; then
         case "$(sed -n 's/^video_crt_csync_mode *= *"\([0-9]\)".*/\1/p' /media/sd/config/replay.cfg 2>/dev/null | head -1)" in
             1) want=0x0c ;; 2) want=0x00 ;;
         esac
+        # The 0xB5/0x61 reads switch the chip's GLOBAL page register; the csync
+        # watchdog does too, so a concurrent read races it and returns garbage.
+        # Pause the watchdog for the read (it restarts immediately; the mode is
+        # already latched). Skip pausing during a player session — the launcher
+        # owns the bus then and the system service is already stopped.
+        paused=""
+        if systemctl is-active --quiet rgbpi-csync && ! pgrep -f "[d]vdplayer_python.main" >/dev/null 2>&1; then
+            systemctl stop rgbpi-csync; paused=1; sleep 0.3
+        fi
         i2cset -y -a "$dac" 0x78 0x00 0x04 2>/dev/null
         b5="$(i2cget -y -a "$dac" 0x78 0xB5 2>/dev/null)"
         i2cset -y -a "$dac" 0x78 0x00 0x00 2>/dev/null
         s61="$(i2cget -y -a "$dac" 0x78 0x61 2>/dev/null)"
+        [ -n "$paused" ] && systemctl start rgbpi-csync
         check "csync mode 0xB5 = $b5 (want $want)"    sh -c "test \"$(echo $b5 | tr A-F a-f)\" = \"$(echo $want | tr A-F a-f)\""
         check "csync status 0x61 = $s61 (locked 0xff)" sh -c "test \"$s61\" = \"0xff\""
     fi
