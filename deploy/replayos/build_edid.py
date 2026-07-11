@@ -6,14 +6,20 @@ replaces the two base-block detailed timings with the wide 15 kHz modes the
 player needs, keeping vendor/product/name bytes intact so RePlay's DAC
 detection keeps working:
 
-  DTD1 (preferred): 2560x240 @ 59.99 Hz  — UI + NTSC/film content
-  DTD2:             2560x288 @ 50.03 Hz  — PAL content (25 fps = 2 vsyncs)
+  DTD1 (preferred): 2560x240 @ 59.99 Hz  — UI + low-res progressive content
+  DTD2:             2560x288 @ 50.03 Hz  — PAL progressive fallback
+  CEA DTD3:         2560x480i @ 59.94    — NTSC video (full 480-line detail)
+  CEA DTD4:         2560x576i @ 50.00    — PAL video (full 576-line detail)
 
-Both share the exact horizontal timing RePlay's own UI mode uses
-(52.08 MHz pixel clock, 3326 px total -> H = 15.658 kHz), so the CRT never
-sees a horizontal rate change. 288 active lines at 50 Hz give the same 92 %
-active-height as 240 lines at 60 Hz (240 lines in a 313-line scan would
-display vertically squashed).
+All four share the exact horizontal geometry RePlay's own UI mode uses
+(3326 px total). The progressive pair runs the UI clock (52.08 MHz ->
+H = 15.658 kHz); the interlaced pair tunes the clock to the broadcast
+standards (52.33 MHz -> H = 15.734 kHz NTSC, 51.97 MHz -> H = 15.625 kHz
+PAL), so the CRT only ever sees 15.6-15.8 kHz. Interlaced DTD vertical
+values are in FRAME units — verified empirically: Linux drm_edid does NOT
+double per-field values (a field-encoded DTD came out as "2560x240i@120").
+288 active lines at 50 Hz give the same 92 % active-height as 240 lines at
+60 Hz (240 lines in a 313-line scan would display vertically squashed).
 
 Usage (on the Pi):
   python3 build_edid.py /sys/class/drm/card1-HDMI-A-1/edid /lib/firmware/edid/mortaca_240p.bin
@@ -25,7 +31,7 @@ and reboot.
 import sys
 
 
-def build_dtd(clk, hact, hso_start, hso_end, htot, vact, vso_start, vso_end, vtot):
+def build_dtd(clk, hact, hso_start, hso_end, htot, vact, vso_start, vso_end, vtot, interlaced=False):
     """Encode one EDID detailed timing descriptor (clk in 10 kHz units)."""
     hbl = htot - hact
     hso = hso_start - hact
@@ -51,6 +57,8 @@ def build_dtd(clk, hact, hso_start, hso_end, htot, vact, vso_start, vso_end, vto
     b[13] = 200 & 0xFF
     b[14] = ((270 >> 8) << 4) | (200 >> 8)
     b[17] = 0x18  # digital, separate sync, negative H/V polarities
+    if interlaced:
+        b[17] |= 0x80
     return b
 
 
@@ -146,34 +154,60 @@ def main():
     )
     d[127] = (256 - sum(d[0:127])) & 0xFF
 
+    # CEA extension: strip its video modes (audio kept), then append the two
+    # interlaced wide modes as CEA detailed timings — the 4 base descriptor
+    # slots are already taken (2 DTDs + range limits + monitor name).
+    cleaned = None
     if d[126] >= 1 and len(d) >= 256:
         cleaned = _neutralize_cea(d[128:256])
-        if cleaned is not None:
-            d[128:256] = cleaned
-            d = d[:256]  # keep exactly one extension
-            d[126] = 1
-        else:
-            d = d[:128]
-            d[126] = 0
-            d[127] = (256 - sum(d[0:127])) & 0xFF
-    else:
-        d = d[:128]
-        d[126] = 0
-        d[127] = (256 - sum(d[0:127])) & 0xFF
+    if cleaned is None:
+        # No usable CEA block in the source: build a minimal one (rev 3, no
+        # data blocks) just to carry the interlaced DTDs.
+        cleaned = bytearray(128)
+        cleaned[0], cleaned[1], cleaned[2] = 0x02, 0x03, 4
+    dtd_off = cleaned[2]
+    for dtd in (
+        # 2560x480i @ 59.94 — NTSC broadcast line rate (H = 15.734 kHz).
+        build_dtd(5233, 2560, 2664, 2910, 3326, 480, 484, 490, 525, interlaced=True),
+        # 2560x576i @ 50.00 — PAL broadcast line rate (H = 15.625 kHz).
+        build_dtd(5197, 2560, 2664, 2910, 3326, 576, 580, 586, 625, interlaced=True),
+    ):
+        if dtd_off + 18 > 127:
+            sys.exit("no room left in the CEA extension for the interlaced DTDs")
+        cleaned[dtd_off : dtd_off + 18] = dtd
+        dtd_off += 18
+    cleaned[127] = (256 - sum(cleaned[0:127])) & 0xFF
+    d = d[:128]
+    d[126] = 1
+    d[127] = (256 - sum(d[0:127])) & 0xFF
+    d += cleaned
 
-    open(dst, "wb").write(d)
-    for off, label in ((54, "DTD1"), (72, "DTD2")):
-        b = d[off : off + 18]
+    # --- verify & report: EVERY exposed timing must stay in the safe band ---
+    timings = [(d[54:72], "DTD1"), (d[72:90], "DTD2")]
+    ext = d[128:256]
+    p, n = ext[2], 3
+    while p + 18 <= 127 and not (ext[p] == 0 and ext[p + 1] == 0):
+        timings.append((ext[p : p + 18], f"DTD{n} (CEA)"))
+        p, n = p + 18, n + 1
+    for b, label in timings:
         clk = (b[0] | b[1] << 8) * 10
         hact = b[2] | ((b[4] & 0xF0) << 4)
         hbl = b[3] | ((b[4] & 0x0F) << 8)
         vact = b[5] | ((b[7] & 0xF0) << 4)
         vbl = b[6] | ((b[7] & 0x0F) << 8)
+        inter = bool(b[17] & 0x80)
         htot, vtot = hact + hbl, vact + vbl
+        h_khz = clk / htot
+        # Interlaced DTD verticals are frame units; V shown = field rate.
+        v_hz = clk * 1000 / htot / vtot * (2 if inter else 1)
         print(
-            f"{label}: {hact}x{vact} clock={clk}kHz htot={htot} vtot={vtot} "
-            f"-> H={clk/htot:.3f}kHz V={clk*1000/htot/vtot:.3f}Hz"
+            f"{label}: {hact}x{vact}{'i' if inter else ''} clock={clk}kHz "
+            f"htot={htot} vtot={vtot} -> H={h_khz:.3f}kHz V={v_hz:.3f}Hz"
         )
+        if h_khz > 16.0 or clk > 60000:
+            sys.exit(f"SAFETY ABORT: {label} exceeds H 16 kHz / clock 60 MHz — nothing written")
+
+    open(dst, "wb").write(d)
     print(f"written: {dst}")
 
 

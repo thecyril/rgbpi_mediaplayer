@@ -52,14 +52,24 @@ Three hardware/OS quirks drive the whole design:
 
 ### Display modes
 
-Two wide 15 kHz modes are injected via the kernel's EDID firmware override
-(no EEPROM flashing, fully reversible). Both share RePlay's exact horizontal
-timing (52.08 MHz clock, 3326 px total → H = 15.658 kHz):
+Four wide 15 kHz modes are injected via the kernel's EDID firmware override
+(no EEPROM flashing, fully reversible). All share RePlay's exact horizontal
+geometry (3326 px total); the interlaced pair tunes the pixel clock to the
+broadcast line rates:
 
-| Mode           | vtotal | Refresh  | Used for                          |
-|----------------|--------|----------|-----------------------------------|
-| 2560x240 (pref)| 261    | 59.99 Hz | player UI, NTSC/film content      |
-| 2560x288       | 313    | 50.03 Hz | PAL content (25 fps = 2 vsyncs)   |
+| Mode            | Clock     | H (kHz) | Refresh   | Used for                        |
+|-----------------|-----------|---------|-----------|---------------------------------|
+| 2560x240 (pref) | 52.08 MHz | 15.658  | 59.99 Hz  | player UI, low-res progressive  |
+| 2560x288        | 52.08 MHz | 15.658  | 50.03 Hz  | PAL progressive fallback        |
+| 2560x480i (CEA) | 52.33 MHz | 15.734  | 59.94 Hz i| NTSC video — full 480 lines     |
+| 2560x576i (CEA) | 51.97 MHz | 15.625  | 50.00 Hz i| PAL video — full 576 lines      |
+
+The interlaced pair restores the legacy OS4 480i/576i rendering (no 240-line
+decimation of video, no hard scanlines on it); the player selects them via
+`DVDPLAYER_MPV_DRM_MODE_NTSC=2560x480` / `DVDPLAYER_MPV_DRM_MODE_PAL=2560x576`
+in `replay_launch.sh`. Interlaced DTD verticals are **frame units** (480/525,
+576/625): Linux `drm_edid` does not double per-field values — a field-encoded
+DTD comes out as a bogus `2560x240i@120`.
 
 288 active lines at 50 Hz are **mandatory** (not optional): a 50 Hz scan has
 313 lines, so 240 active lines would only cover 77 % of the screen height and
@@ -74,11 +84,12 @@ A 15 kHz CRT (PVM/BVM) can be **damaged** by a horizontal signal above
 - **Kernel / userspace (all normal operation).** `build_edid.py` produces a
   **15 kHz-only** EDID: it strips the stock EDID's established timings, the 8
   standard timings, and every CEA extension video mode (VICs + detailed
-  timings), keeping only the two 15 kHz DTDs (audio data blocks are
+  timings), keeping only the four 15 kHz timings (audio data blocks are
   preserved). It also clamps the display range-limits descriptor to
-  15-16 kHz. Result: `cat /sys/class/drm/card1-HDMI-A-1/modes` lists **only**
-  `2560x240` and `2560x288` — no client can pick a 31 kHz+ mode because none
-  exist. RePlay makes its own 15 kHz USERDEF modes and, with a valid EDID,
+  15-16 kHz, and refuses to write at all if any resulting timing exceeds
+  H 16 kHz / clock 60 MHz. Result: `cat /sys/class/drm/card1-HDMI-A-1/modes`
+  lists **only** `2560x240`, `2560x288`, `2560x480i` and `2560x576i` — no
+  client can pick a 31 kHz+ mode because none exist. RePlay makes its own 15 kHz USERDEF modes and, with a valid EDID,
   never hits its 640x480 fallback.
 - **Firmware early boot (~5 s before KMS).** Left alone the firmware drives
   the dongle EEPROM's preferred **1024x768 @ 48 kHz** (verified: the boot
@@ -194,8 +205,8 @@ renumber the DDC buses).
 2. **EDID override**: `build_edid.py <connector edid> /lib/firmware/edid/…`
    plus `drm.edid_firmware=HDMI-A-1:edid/…` appended to the single line of
    `/boot/firmware/cmdline.txt`. After reboot,
-   `cat /sys/class/drm/card1-HDMI-A-1/modes` must list `2560x240` (first) and
-   `2560x288`.
+   `cat /sys/class/drm/card1-HDMI-A-1/modes` must list `2560x240` (first),
+   `2560x288`, `2560x480i` and `2560x576i`.
 3. **Launcher**: `replay_launch.sh` at the app root (stops replay.service,
    exports the display/audio/lib environment, runs the csync watchdog, starts
    the player, restarts RePlay on exit). Geometry/env tuning lives at the top

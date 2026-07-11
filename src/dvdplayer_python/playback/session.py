@@ -604,6 +604,45 @@ def _desired_output_mode(
     return None
 
 
+def _standard_env_suffix(target_mode: str) -> Optional[str]:
+    """Env-var suffix of the per-standard video mode for a logical target."""
+    if target_mode == "720x576i":
+        return "PAL"
+    if target_mode == "720x480i":
+        return "NTSC"
+    return None
+
+
+def _standard_mode_override(target_mode: str) -> Optional[str]:
+    """Per-standard video mode from DVDPLAYER_MPV_DRM_MODE_{PAL,NTSC}, or None.
+
+    PAL-routed content gets the 50 Hz variant (25 fps maps to exactly two
+    fields per frame instead of the juddery 2:3 pulldown a fixed 60 Hz
+    output forces); NTSC-routed content gets the 59.94 Hz variant. With the
+    interlaced EDID modes (e.g. "2560x576" -> 2560x576i, "2560x480" ->
+    2560x480i) sources keep their full vertical resolution instead of being
+    decimated into the 240/288-line progressive rasters.
+    """
+    suffix = _standard_env_suffix(target_mode)
+    if suffix is None:
+        return None
+    return os.environ.get(f"DVDPLAYER_MPV_DRM_MODE_{suffix}", "").strip() or None
+
+
+def _standard_mode_geometry(target_mode: str) -> Optional[str]:
+    """Geometry source for the per-standard mode: _GEOM wins over the name.
+
+    The _GEOM variant (e.g. DVDPLAYER_MPV_DRM_MODE_PAL_GEOM) only matters
+    when the mode itself is selected by index instead of a "WxH" name.
+    """
+    mode = _standard_mode_override(target_mode)
+    if mode is None:
+        return None
+    suffix = _standard_env_suffix(target_mode)
+    geom = os.environ.get(f"DVDPLAYER_MPV_DRM_MODE_{suffix}_GEOM", "").strip()
+    return geom or mode
+
+
 def _mpv_drm_mode_value(target_mode: str) -> str:
     # RePlayOS + RGB-Pi 2 (HDMI CH7101 DAC): the CRT is 15 kHz-only, and at
     # 15 kHz the classic narrow 720-wide modes need pixel clocks (13.5 MHz)
@@ -614,14 +653,7 @@ def _mpv_drm_mode_value(target_mode: str) -> str:
     # output mode (e.g. "2560x240"); unset = legacy RGB-Pi OS4 behaviour.
     override = os.environ.get("DVDPLAYER_MPV_DRM_MODE")
     if override:
-        # PAL-routed content gets the 50 Hz variant when one is provided:
-        # 25 fps then maps to exactly two vsyncs per frame instead of the
-        # juddery 2:3 pulldown a fixed 60 Hz output forces.
-        if target_mode == "720x576i":
-            pal = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL", "").strip()
-            if pal:
-                return pal
-        return override
+        return _standard_mode_override(target_mode) or override
     if target_mode == "720x576i":
         return "720x576@50"
     if target_mode == "720x480i":
@@ -659,11 +691,7 @@ def _monitor_pixel_aspect_for_mode(target_mode: Optional[str]) -> Optional[float
     # is selected by index.
     override = os.environ.get("DVDPLAYER_MPV_DRM_MODE")
     if override:
-        if target_mode == "720x576i":
-            pal = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL", "").strip()
-            if pal:
-                geom = os.environ.get("DVDPLAYER_MPV_DRM_MODE_PAL_GEOM", "").strip()
-                override = geom or pal
+        override = _standard_mode_geometry(target_mode) or override
         m = re.match(r"^\s*(\d+)x(\d+)", override)
         if m and int(m.group(1)) > 0:
             return (4.0 / 3.0) * int(m.group(2)) / int(m.group(1))

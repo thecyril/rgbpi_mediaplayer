@@ -19,12 +19,15 @@ export DVDPLAYER_DISPLAY_H=240
 # video must go to the same wide 240p mode (no 15 kHz 720-wide modes exist).
 export DVDPLAYER_DRM_CONNECTOR=HDMI-A-1
 export DVDPLAYER_MPV_DRM_MODE=2560x240
-# PAL content (25 fps) plays on the PAL-land raster (2560x288@50, vtot=313,
-# added to the EDID override): exact 2-vsync-per-frame cadence AND the same
-# 92% active height as the 240p@60 mode (240 lines in a 313-line scan would
-# show squashed). Matched by NAME — unique in the list, no refresh needed
-# (mpv 0.32's "@50" would fail against the real 50.03 Hz).
-export DVDPLAYER_MPV_DRM_MODE_PAL=2560x288
+# Interlaced video rasters (CEA DTDs in the EDID override): PAL content
+# plays on 2560x576i@50 (H = 15.625 kHz), NTSC video on 2560x480i@59.94
+# (H = 15.734 kHz) — full vertical resolution on the CRT like the legacy
+# OS4 576i/480i DPI modes, instead of decimating into the 288/240-line
+# progressive rasters. 25 fps PAL keeps its exact 2-fields-per-frame
+# cadence at 50 Hz. Matched by NAME: mpv looks the mode up by WxH, each is
+# unique in the list (an "@50" suffix would fail against the real 50.001).
+export DVDPLAYER_MPV_DRM_MODE_PAL=2560x576
+export DVDPLAYER_MPV_DRM_MODE_NTSC=2560x480
 # Keep the bundled bullseye rootfs libs away from the system python/pygame
 # (SDL + glibc clashes on trixie) — the start script exports them to the mpv
 # child only (DVDPLAYER_MPV_LD_LIBRARY_PATH consumed by _child_env).

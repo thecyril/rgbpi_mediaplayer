@@ -41,9 +41,11 @@ if [ "${1:-}" = "--check" ]; then
     modes="$(cat /sys/class/drm/card*-HDMI-A-1/modes 2>/dev/null || true)"
     check "EDID mode 2560x240 (UI / 60 Hz)"          sh -c "echo '$modes' | grep -q 2560x240"
     check "EDID mode 2560x288 (PAL / 50 Hz)"          sh -c "echo '$modes' | grep -q 2560x288"
-    # SAFETY: the kernel must expose NOTHING but the two 15 kHz modes — any
+    check "EDID mode 2560x480i (NTSC video)"          sh -c "echo '$modes' | grep -q 2560x480i"
+    check "EDID mode 2560x576i (PAL video)"           sh -c "echo '$modes' | grep -q 2560x576i"
+    # SAFETY: the kernel must expose NOTHING but the four 15 kHz modes — any
     # other mode is a >15.7 kHz signal a client could send to the CRT.
-    hi="$(echo "$modes" | grep -vE '^(2560x240|2560x288)?$' | grep -v '^$' || true)"
+    hi="$(echo "$modes" | grep -vE '^(2560x240|2560x288|2560x480i|2560x576i)?$' | grep -v '^$' || true)"
     check "kernel exposes ONLY 15 kHz modes"          sh -c "test -z \"$hi\""
     [ -n "$hi" ] && printf '     !! extra modes present: %s\n' "$(echo "$hi" | tr '\n' ' ')"
     # SAFETY: the firmware early boot must be forced to 15 kHz too.
