@@ -9,6 +9,7 @@ import subprocess
 import fcntl
 import struct
 import threading
+import traceback
 import unicodedata
 from glob import glob
 from dataclasses import asdict, replace
@@ -19,6 +20,7 @@ import pygame
 
 from dvdplayer_python.control.server import ControlServer
 from dvdplayer_python.core.debuglog import log_event, log_path
+from dvdplayer_python.core.jsonstore import write_text_atomic
 from dvdplayer_python.core.models import (
     CONTROL_API_SOCKET,
     CONTROL_STATE_PATH,
@@ -3455,15 +3457,12 @@ class App:
             Path(f"/tmp/rgbpi-dvdplayer-state.{os.getuid()}.json"),
         ]
         for target in targets:
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
-                tmp.write_text(payload, encoding="utf-8")
-                tmp.replace(target)
+            # durable=False: this is a throwaway status export rewritten 5x/s,
+            # rebuilt from scratch on every start — the rename alone is enough
+            # and an fsync here would only wear the SD card.
+            if write_text_atomic(target, payload, durable=False):
                 return
-            except Exception as exc:
-                log_event("runtime_state_write_failed", path=str(target), error=str(exc))
-                continue
+            log_event("runtime_state_write_failed", path=str(target))
 
     def runtime_snapshot(self) -> RuntimeSnapshot:
         selected_index = None
@@ -4129,6 +4128,12 @@ def main() -> int:
     except RuntimeError as exc:
         log_event("app_start_skipped", reason=str(exc))
         return 0
+    except Exception as exc:
+        # Startup crashes are the worst kind: no socket, no screen, and the
+        # launcher just bounces back to RePlay, so the reason is only ever in
+        # the stderr log. Mirror it into the structured debug log too.
+        log_event("app_start_failed", error=str(exc), traceback=traceback.format_exc())
+        raise
 
     def _sigterm(_sig, _frm):
         log_event("app_stop_requested", reason="signal", signal=int(_sig))

@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import ipaddress
 import hashlib
-import json
 import os
 import re
 import socket
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from dvdplayer_python.core.debuglog import log_event
+from dvdplayer_python.core.jsonstore import read_json, write_json, write_text_atomic
 
 
 CONFIG_FILE_NAME = "network_sources.json"
@@ -87,12 +87,10 @@ class NetworkBackend:
         except Exception:
             pass
         key = os.urandom(32)
-        try:
-            key_path.parent.mkdir(parents=True, exist_ok=True)
-            key_path.write_text(base64.b64encode(key).decode("ascii"), encoding="utf-8")
-            os.chmod(key_path, 0o600)
-        except Exception as exc:
-            log_event("cred_key_write_failed", error=str(exc))
+        # Atomic: a half-written key file would be unusable on the next start,
+        # and regenerating the key makes every saved password undecodable.
+        if not write_text_atomic(key_path, base64.b64encode(key).decode("ascii"), mode=0o600):
+            log_event("cred_key_write_failed", path=str(key_path))
         return key
 
     def _obfuscate(self, plain: Optional[str]) -> Optional[str]:
@@ -119,12 +117,8 @@ class NetworkBackend:
         return [e for e in entries if isinstance(e, dict) and e.get("password")]
 
     def _load(self) -> dict:
-        if not self.config_path.is_file():
-            return {"roots": [], "credentials": []}
-        try:
-            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            log_event("network_config_load_failed", error=str(exc))
+        raw = read_json(self.config_path, None, expect=dict)
+        if raw is None:
             return {"roots": [], "credentials": []}
         raw.setdefault("roots", [])
         raw.setdefault("credentials", [])
@@ -146,11 +140,9 @@ class NetworkBackend:
             "roots": [self._encode_secrets(dict(r)) for r in self.config.get("roots", [])],
             "credentials": [self._encode_secrets(dict(c)) for c in self.config.get("credentials", [])],
         }
-        self.config_path.write_text(json.dumps(disk, indent=2), encoding="utf-8")
-        try:
-            os.chmod(self.config_path, 0o600)
-        except OSError as exc:
-            log_event("network_config_chmod_failed", error=str(exc))
+        # 0600 is applied to the temp file before the rename, so the obfuscated
+        # SMB passwords are never briefly world-readable at the final path.
+        write_json(self.config_path, disk, mode=0o600)
 
     def _encode_secrets(self, entry: dict) -> dict:
         if entry.get("password"):
