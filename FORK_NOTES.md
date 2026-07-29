@@ -311,6 +311,55 @@ file), owner-only perms, and no git-commit exposure. For real secret-at-rest you
 would have to drop unattended reconnect and prompt for the password each boot
 (keep username only) — offered to the user, declined in favour of zero friction.
 
+## Crash-safe JSON state files (`core/jsonstore.py`)
+
+**Symptom:** a reboot (or power cut) *during playback* bricked the player. Every
+launch after it exited `rc=1` before drawing anything and the launcher bounced
+straight back to RePlay — no socket, no state file, so every health probe said
+`healthy: false`. The real cause was in the python launch log:
+
+```
+File ".../core/persistence.py", line 26, in load
+  raw = json.loads(self.bookmarks_path.read_text(encoding="utf-8"))
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+```
+
+`playback_bookmarks.json` was zero bytes. `Path.write_text` truncates the target
+before writing, and bookmarks are rewritten every ~5 s while a video plays, so it
+is by far the file most likely to be caught mid-write by a reboot. `json.loads("")`
+then raised inside `App.__init__`, i.e. before the control socket exists.
+
+**Fix:** all persistent state goes through `core/jsonstore.py`.
+
+- `write_json()` / `write_text_atomic()` write to a temp file, `flush` + `fsync`
+  it, then `os.replace()` it over the target and fsync the directory. A reader
+  now only ever sees the whole old or the whole new file — never a truncated one.
+  `mode=0o600` is applied to the temp file *before* the rename, so the SMB
+  credential files are never briefly world-readable at their final path.
+- `read_json()` never raises: a missing file returns the caller's default, and a
+  corrupt one (invalid JSON, or valid JSON of the wrong shape) is moved aside to
+  `<name>.bad`, logged as a `state_file_corrupt` event, and replaced by defaults.
+  Losing one file's settings beats losing the player.
+- Per-entry decoding in `persistence.py` (`_decode_bookmark`, and unknown keys
+  filtered out of `PlaybackPrefs`) so one bad record inside an otherwise valid
+  file is skipped instead of taking the whole file down.
+
+Covered: `playback_bookmarks.json`, `playback_prefs.json`,
+`playback_last_played.json`, `plex_state.json`, `plex_cache.json`,
+`network_sources.json`, `state/credentials.key`. The runtime status export
+(`rgbpi-dvdplayer-state.json`) uses the same atomic rename with `durable=False` —
+it is rewritten 5×/s and rebuilt from scratch on every start, so fsyncing it
+would only wear the SD card for nothing.
+
+A startup crash from any *other* cause is now also mirrored into the structured
+debug log as `app_start_failed` (with traceback), instead of only landing in the
+stderr launch log.
+
+**Recovery on an already-bricked Pi:** just `git pull` the fix — the corrupt file
+is detected and quarantined automatically on the next launch. To check afterwards:
+`ls /opt/rgbpi_mediaplayer/state/*.bad`. The quarantined file's settings (resume
+points, or the Plex link if it was `plex_state.json`) are the only thing lost.
+
 ## DVD title picker (mpv can't navigate DVD menus)
 
 **Why:** mpv removed interactive DVD-menu support years ago. In the bundled

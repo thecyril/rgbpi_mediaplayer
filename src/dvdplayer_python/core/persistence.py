@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Dict, Optional
 
+from .jsonstore import read_json, write_json
 from .models import BookmarkState, LastPlayedState, PlaybackKind, PlaybackPrefs, PlaybackSource
 
 
@@ -22,25 +22,28 @@ class PlaybackStateStore:
         self.load()
 
     def load(self) -> None:
-        if self.bookmarks_path.is_file():
-            raw = json.loads(self.bookmarks_path.read_text(encoding="utf-8"))
-            self.bookmarks = {
-                key: BookmarkState(**value) for key, value in raw.items() if isinstance(value, dict)
-            }
-        if self.prefs_path.is_file():
-            raw = json.loads(self.prefs_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self.prefs = PlaybackPrefs(**{**asdict(PlaybackPrefs()), **raw})
-                self.prefs.motion_mode = _normalize_motion_mode(self.prefs.motion_mode)
-                self.prefs.default_mode = _normalize_default_mode(self.prefs.default_mode)
-                self.prefs.volume_normalization = _normalize_volume_normalization(self.prefs.volume_normalization)
-                self.prefs.deinterlace_mode = _normalize_deinterlace_mode(self.prefs.deinterlace_mode)
-                self.prefs.aspect_mode = _normalize_aspect_mode(self.prefs.aspect_mode, self.prefs.force_43)
-                # Keep the legacy bool consistent so a downgrade still behaves.
-                self.prefs.force_43 = self.prefs.aspect_mode == "stretch"
-        if self.last_played_path.is_file():
-            raw = json.loads(self.last_played_path.read_text(encoding="utf-8"))
-            self.last_played = _decode_last_played(raw)
+        # Nothing here may raise: this runs from App.__init__ before the control
+        # socket exists, so a state file the SD card lost mid-write would take
+        # the whole player down with it (see core/jsonstore).
+        raw = read_json(self.bookmarks_path, {}, expect=dict)
+        self.bookmarks = {}
+        for key, value in raw.items():
+            bookmark = _decode_bookmark(value)
+            if bookmark:
+                self.bookmarks[str(key)] = bookmark
+        raw = read_json(self.prefs_path, {}, expect=dict)
+        if raw:
+            known = {f.name for f in fields(PlaybackPrefs)}
+            stored = {k: v for k, v in raw.items() if k in known}
+            self.prefs = PlaybackPrefs(**{**asdict(PlaybackPrefs()), **stored})
+            self.prefs.motion_mode = _normalize_motion_mode(self.prefs.motion_mode)
+            self.prefs.default_mode = _normalize_default_mode(self.prefs.default_mode)
+            self.prefs.volume_normalization = _normalize_volume_normalization(self.prefs.volume_normalization)
+            self.prefs.deinterlace_mode = _normalize_deinterlace_mode(self.prefs.deinterlace_mode)
+            self.prefs.aspect_mode = _normalize_aspect_mode(self.prefs.aspect_mode, self.prefs.force_43)
+            # Keep the legacy bool consistent so a downgrade still behaves.
+            self.prefs.force_43 = self.prefs.aspect_mode == "stretch"
+        self.last_played = _decode_last_played(read_json(self.last_played_path, None, expect=dict))
 
     def bookmark(self, key: str) -> Optional[BookmarkState]:
         return self.bookmarks.get(key)
@@ -69,7 +72,7 @@ class PlaybackStateStore:
 
     def write_bookmarks(self) -> None:
         data = {key: asdict(value) for key, value in self.bookmarks.items()}
-        self.bookmarks_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        write_json(self.bookmarks_path, data)
 
     def write_prefs(self) -> None:
         self.prefs.motion_mode = _normalize_motion_mode(self.prefs.motion_mode)
@@ -78,7 +81,7 @@ class PlaybackStateStore:
         self.prefs.deinterlace_mode = _normalize_deinterlace_mode(self.prefs.deinterlace_mode)
         self.prefs.aspect_mode = _normalize_aspect_mode(self.prefs.aspect_mode, self.prefs.force_43)
         self.prefs.force_43 = self.prefs.aspect_mode == "stretch"
-        self.prefs_path.write_text(json.dumps(asdict(self.prefs), indent=2), encoding="utf-8")
+        write_json(self.prefs_path, asdict(self.prefs))
 
     def save_last_played(
         self,
@@ -112,7 +115,32 @@ class PlaybackStateStore:
             "duration_seconds": self.last_played.duration_seconds,
             "updated_at_unix_ms": self.last_played.updated_at_unix_ms,
         }
-        self.last_played_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        write_json(self.last_played_path, payload)
+
+
+def _decode_bookmark(raw: object) -> Optional[BookmarkState]:
+    if not isinstance(raw, dict):
+        return None
+    uri = str(raw.get("uri") or "").strip()
+    if not uri:
+        return None
+    try:
+        position_seconds = float(raw.get("position_seconds") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    duration_raw = raw.get("duration_seconds")
+    duration_seconds = float(duration_raw) if isinstance(duration_raw, (int, float)) else None
+    try:
+        updated_at_unix_ms = int(raw.get("updated_at_unix_ms") or 0)
+    except (TypeError, ValueError):
+        updated_at_unix_ms = 0
+    return BookmarkState(
+        title=str(raw.get("title") or Path(uri).name or "Video"),
+        uri=uri,
+        position_seconds=position_seconds,
+        duration_seconds=duration_seconds,
+        updated_at_unix_ms=updated_at_unix_ms,
+    )
 
 
 def _normalize_motion_mode(value: object) -> str:
