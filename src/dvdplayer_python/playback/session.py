@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from dvdplayer_python.core import platform as host_platform
 from dvdplayer_python.core.debuglog import log_event
 from dvdplayer_python.core.models import PlaybackKind, PlaybackPrefs, PlaybackSource
 
@@ -262,7 +263,9 @@ def _resolve_audio_output(prefs: Optional[PlaybackPrefs] = None) -> str:
         raw = raw.strip().lower()
         if raw in {"optical_5_1", "optical"}:
             return "optical_5_1"
-        if raw in {"jack", "hdmi"}:
+        if raw == "jack":
+            return raw
+        if raw == "hdmi" and "hdmi" in host_platform.current().audio_outputs:
             return raw
         return None
 
@@ -1684,13 +1687,15 @@ class PlaybackSession:
                 "--vo=drm",
                 f"--drm-connector={_mpv_drm_connector_value(drm_target)}",
                 f"--drm-mode={_mpv_drm_mode_value(target_mode)}",
-                # vo=drm scales in software (swscale) and the default scaler
-                # saturates a Pi 4 core on 2560-wide CRT modes (measured
-                # ~5 dropped frames/s on a PAL DVD). fast-bilinear measures
-                # 0 drops, and the CRT's own beam smoothing hides the scaler
-                # quality difference at these super-res widths.
-                "--sws-scaler=fast-bilinear",
             ]
+            # RePlayOS: vo=drm scales in software (swscale) and the default
+            # scaler saturates a Pi 4 core on 2560-wide CRT modes (measured
+            # ~5 dropped frames/s on a PAL DVD). fast-bilinear measures 0
+            # drops, and the CRT's own beam smoothing hides the scaler quality
+            # difference at these super-res widths. OS4 keeps mpv's default.
+            sws_scaler = host_platform.current().mpv_sws_scaler
+            if sws_scaler:
+                args.append(f"--sws-scaler={sws_scaler}")
             log_event(
                 "mpv_drm_target",
                 card=drm_target.card,

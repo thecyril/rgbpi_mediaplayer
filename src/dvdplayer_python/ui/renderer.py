@@ -5,6 +5,7 @@ from typing import Iterable, Optional
 
 import pygame
 
+from dvdplayer_python.core import platform as host_platform
 from dvdplayer_python.core.models import WINDOW_H, WINDOW_W
 
 
@@ -46,14 +47,21 @@ class RenderModel:
 class Renderer:
     def __init__(self):
         pygame.init()
-        # The UI plays no sounds, but pygame.init() opens the ALSA device and
-        # HOLDS it for the whole app lifetime — on RePlayOS that's the single
-        # vc4-hdmi PCM (exclusive open), which starves mpv of audio during
-        # playback. Release it for good.
-        pygame.mixer.quit()
+        self.platform = host_platform.current()
+        if self.platform.close_audio_mixer:
+            # The UI plays no sounds, but pygame.init() opens the ALSA device and
+            # HOLDS it for the whole app lifetime — on RePlayOS that's the single
+            # vc4-hdmi PCM (exclusive open), which starves mpv of audio during
+            # playback. Release it for good.
+            pygame.mixer.quit()
         self.display: Optional[pygame.Surface] = None
         self._create_display()
-        self.screen = pygame.Surface((WINDOW_W, WINDOW_H))
+        # OS4 draws straight onto its 320x240 window. RePlayOS draws onto a
+        # 320x240 canvas that render() scales up to the wide CRT mode.
+        if self.platform.ui_display_size:
+            self.screen = pygame.Surface((WINDOW_W, WINDOW_H))
+        else:
+            self.screen = self.display
         self.font_l = pygame.font.SysFont("DejaVu Sans", 16, bold=True)
         self.font_m = pygame.font.SysFont("DejaVu Sans", 12, bold=True)
         self.font_s = pygame.font.SysFont("DejaVu Sans", 10)
@@ -64,9 +72,8 @@ class Renderer:
         flags = 0
         if _os.environ.get("DVDPLAYER_WINDOWED") != "1":
             flags |= pygame.FULLSCREEN
-        _dw = int(_os.environ.get("DVDPLAYER_DISPLAY_W", "640"))
-        _dh = int(_os.environ.get("DVDPLAYER_DISPLAY_H", "480"))
-        self.display = pygame.display.set_mode((_dw, _dh), flags)
+        size = self.platform.ui_display_size or (WINDOW_W, WINDOW_H)
+        self.display = pygame.display.set_mode(size, flags)
         pygame.mouse.set_visible(False)
 
     def release_display(self) -> None:
@@ -77,7 +84,11 @@ class Renderer:
         masters cannot coexist, so mpv's CRTC setup fails with EPERM while the
         UI window exists. Gamepad input is unaffected (raw /dev/input/js0
         thread), and the main loop already skips rendering during playback.
+
+        RePlayOS only: on OS4 mpv overlays the CRT while the window stays up.
         """
+        if not self.platform.release_display_for_playback:
+            return
         if not pygame.display.get_init():
             return
         pygame.display.quit()
@@ -85,6 +96,8 @@ class Renderer:
 
     def reacquire_display(self) -> None:
         """Re-create the SDL window after external playback released the DRM."""
+        if not self.platform.release_display_for_playback:
+            return
         if pygame.display.get_init() and self.display is not None:
             return
         pygame.display.init()
@@ -177,7 +190,8 @@ class Renderer:
             self.text(self._fit_text(self.font_s, model.message_body or "", msg_w - 24), WINDOW_W // 2, msg_y + 40, size="s", center=True)
             self.text("A/B CLOSE", WINDOW_W // 2, msg_y + 70, color=THEME_TEXT_DIM, size="s", center=True)
 
-        pygame.transform.scale(self.screen, self.display.get_size(), self.display)
+        if self.screen is not self.display:
+            pygame.transform.scale(self.screen, self.display.get_size(), self.display)
         pygame.display.flip()
 
     def screenshot(self, path: str) -> None:

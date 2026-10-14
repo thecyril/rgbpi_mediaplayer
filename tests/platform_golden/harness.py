@@ -691,7 +691,18 @@ def main():
         emit(f"  {item.kind}: {norm(item.title)} | {norm(item.subtitle)}")
     emit()
 
+    emit("### audio output subtitle per stored pref")
+    for stored in ("jack", "optical_5_1", "optical", "hdmi", "bogus"):
+        app.playback_state.prefs.audio_output = stored
+        emit(f"  {stored} -> {app._audio_output_subtitle()}")
+    emit()
+
     emit("### audio output cycle")
+    for start in ("jack", "hdmi"):
+        app.playback_state.prefs.audio_output = start
+        item = next(i for i in app._settings_items() if i.kind == "settings_audio_output")
+        app._adjust_switchable_setting(item, M.Action.RIGHT)
+        emit(f"  from {start}: right -> {app.playback_state.prefs.audio_output}")
     item = next(i for i in app._settings_items() if i.kind == "settings_audio_output")
     app.playback_state.prefs.audio_output = "jack"
     for action in [M.Action.RIGHT] * 4 + [M.Action.LEFT] * 4:

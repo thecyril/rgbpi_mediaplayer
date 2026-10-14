@@ -45,7 +45,16 @@
   settings_unlink_youtube: UNLINK YOUTUBE | Reset TV pairing
   settings_runtime_install: RUNTIME CHECK | Bundled MPV + libdvdcss
 
+### audio output subtitle per stored pref
+  jack -> JACK 3.5MM
+  optical_5_1 -> OPTICAL 5.1 (Q990D)
+  optical -> OPTICAL 5.1 (Q990D)
+  hdmi -> HDMI (RGB-PI 2)
+  bogus -> JACK 3.5MM
+
 ### audio output cycle
+  from jack: right -> optical_5_1
+  from hdmi: right -> jack
   right -> optical_5_1 (OPTICAL 5.1 (Q990D))
   right -> hdmi (HDMI (RGB-PI 2))
   right -> jack (JACK 3.5MM)

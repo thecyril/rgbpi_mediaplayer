@@ -19,6 +19,7 @@ from typing import Optional
 import pygame
 
 from dvdplayer_python.control.server import ControlServer
+from dvdplayer_python.core import platform as host_platform
 from dvdplayer_python.core.debuglog import log_event, log_path
 from dvdplayer_python.core.jsonstore import write_text_atomic
 from dvdplayer_python.core.models import (
@@ -278,6 +279,8 @@ class App:
         self._autostart_youtube_receiver()
         log_event(
             "app_init",
+            platform=self.renderer.platform.name,
+            platform_detected_by=self.renderer.platform.detected_by,
             app_dir=str(self.app_dir),
             state_dir=str(self.state_dir),
             control_socket=CONTROL_API_SOCKET,
@@ -3084,7 +3087,13 @@ class App:
             session = PlaybackSession.start(
                 self.app_dir, source, prefs,
                 cancelled=lambda: self._playback_start_token != token,
-                before_spawn=self._release_display_for_mpv,
+                # RePlayOS only: on OS4 mpv overlays the CRT and the UI window
+                # stays up, so there is nothing to release.
+                before_spawn=(
+                    self._release_display_for_mpv
+                    if self.renderer.platform.release_display_for_playback
+                    else None
+                ),
             )
             self.background_queue.put(("playback_start_done", token, session, None))
         except PlaybackCancelled:
@@ -3769,7 +3778,7 @@ class App:
         raw = str(value).lower()
         if raw in {"optical_5_1", "optical"}:
             return "OPTICAL 5.1 (Q990D)"
-        if raw == "hdmi":
+        if raw == "hdmi" and "hdmi" in self.renderer.platform.audio_outputs:
             return "HDMI (RGB-PI 2)"
         return "JACK 3.5MM"
 
@@ -3909,13 +3918,17 @@ class App:
             log_event("settings_ntsc_speedup", enabled=next_value, via=action.value)
             return True
         if item.kind == "settings_audio_output":
-            # LEFT/RIGHT cycles through the available outputs.
-            order = ["jack", "optical_5_1", "hdmi"]
-            current = str(getattr(self.playback_state.prefs, "audio_output", "jack") or "jack").lower()
-            if current not in order:
-                current = "jack"
-            step = 1 if action == Action.RIGHT else -1
-            next_value = order[(order.index(current) + step) % len(order)]
+            order = list(self.renderer.platform.audio_outputs)
+            if len(order) == 2:
+                # OS4: RIGHT = optical 5.1, LEFT = jack. Two-value toggle.
+                next_value = order[1] if action == Action.RIGHT else order[0]
+            else:
+                # RePlayOS: LEFT/RIGHT cycles through the available outputs.
+                current = str(getattr(self.playback_state.prefs, "audio_output", "jack") or "jack").lower()
+                if current not in order:
+                    current = "jack"
+                step = 1 if action == Action.RIGHT else -1
+                next_value = order[(order.index(current) + step) % len(order)]
             self.playback_state.prefs.audio_output = next_value
             self.playback_state.write_prefs()
             self._refresh_settings_items()

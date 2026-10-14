@@ -1,0 +1,18 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  platform-golden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"  # RGB-Pi OS4 (bullseye) ships 3.9
+      - name: Platform detection
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: OS4 + RePlayOS behaviour unchanged
+        run: python tests/platform_golden/check.py
