@@ -61,12 +61,28 @@ _VIDEO_FPS_CACHE: dict[str, float] = {}
 # without a second probe. True = interlaced (needs software bwdif), False =
 # progressive (eligible for the zero-copy hardware overlay path).
 _VIDEO_INTERLACED_CACHE: dict[str, bool] = {}
+# Per-URI flag: the video exceeds the Pi 4 hardware decoder's limits (filled by
+# _probe_video_info). True = must software-decode — the hardware would produce a
+# green band / corrupted macroblocks and stall playback.
+_VIDEO_HW_UNSUPPORTED_CACHE: dict[str, bool] = {}
+# The Pi 4 H.264 block (bcm2835-codec, behind v4l2m2m) is a level-4.2 decoder:
+# at most 1920 wide and 8160 macroblocks (1920x1088) per frame. Past that (e.g. a
+# 1650x1440 open-matte encode) it outputs garbage. HEVC (rpivid) does 4K fine.
+_H264_HW_MAX_WIDTH = 1920
+_H264_HW_MAX_MACROBLOCKS = 8160
 # ffprobe field_order values that mean the stream is interlaced.
 _INTERLACED_FIELD_ORDERS = {"tt", "bb", "tb", "bt", "tff", "bff", "interlaced"}
 
 
 def _field_order_is_interlaced(field_order: object) -> bool:
     return str(field_order or "").strip().lower() in _INTERLACED_FIELD_ORDERS
+
+
+def _exceeds_hw_decoder(codec: object, width: int, height: int) -> bool:
+    if str(codec or "").strip().lower() != "h264":
+        return False
+    macroblocks = ((width + 15) // 16) * ((height + 15) // 16)
+    return width > _H264_HW_MAX_WIDTH or macroblocks > _H264_HW_MAX_MACROBLOCKS
 
 
 def _which(binary: str) -> Optional[str]:
@@ -781,7 +797,7 @@ def _probe_video_info(uri: str, prefs: Optional[PlaybackPrefs] = None) -> Option
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=width,height,avg_frame_rate,r_frame_rate,field_order",
+        "stream=width,height,avg_frame_rate,r_frame_rate,field_order,codec_name",
         "-of",
         "json",
         uri,
@@ -830,6 +846,7 @@ def _probe_video_info(uri: str, prefs: Optional[PlaybackPrefs] = None) -> Option
                 _VIDEO_FPS_CACHE[str(uri)] = float(fps)
             if field_order is not None:
                 _VIDEO_INTERLACED_CACHE[str(uri)] = _field_order_is_interlaced(field_order)
+            _VIDEO_HW_UNSUPPORTED_CACHE[str(uri)] = _exceeds_hw_decoder(stream.get("codec_name"), width, height)
             return VideoProbeInfo(width=width, height=height, fps=fps, field_order=str(field_order) if field_order else None)
         except Exception:
             continue
@@ -1242,6 +1259,12 @@ def _hwdec_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = N
     interlaced 480i/576i modes. Measured on a 59 Mbit/s 1080p file: VO frame
     drops fell from ~14/s (software decode + libswscale) to ~1.7/s.
 
+    H.264 beyond the hardware decoder's limits (wider than 1920 or more than
+    1920x1088 worth of macroblocks, e.g. 1650x1440) is software-decoded too:
+    v4l2m2m accepts it but outputs a green band / broken macroblocks and stalls.
+    The Pi 4 software-decodes such a file at full speed (measured: 1650x1440
+    H.264 34 Mbit/s 24p, 0 drops).
+
     Interlaced content (DVDs, but also interlaced Plex/broadcast files) stays
     on software decode ("auto-safe"): it needs the software bwdif deinterlacer,
     which only runs on RAM frames — incompatible with the overlay path. We
@@ -1265,9 +1288,12 @@ def _hwdec_for_source(source: PlaybackSource, prefs: Optional[PlaybackPrefs] = N
     # Probed during output-mode routing (runs before this). Default False
     # (progressive → overlay) when unknown — the common case.
     interlaced = _VIDEO_INTERLACED_CACHE.get(str(source.uri), False)
+    hw_unsupported = _VIDEO_HW_UNSUPPORTED_CACHE.get(str(source.uri), False)
     override = os.environ.get("DVDPLAYER_MPV_HWDEC", "").strip()
     if override:
         mode = override
+    elif hw_unsupported:
+        mode = "no"
     elif is_dvd or interlaced:
         mode = "auto-safe"
     else:
