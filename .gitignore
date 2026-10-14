@@ -11,3 +11,13 @@ state/
 
 # Local SMB/NFS credentials — must never be committed (contains passwords)
 network_sources.json
+
+# RePlayOS/device platform kit — now lives in its own repo (rgbpi2-replayos-pvm).
+# Kept here as LOCAL working copies only, out of this repo's git history
+# (this repo is the media player app).
+deploy/replayos/REPLAY-INTERNALS.md
+deploy/replayos/OS-CHANGES.md
+deploy/replayos/apply_replay_patches.sh
+deploy/replayos/show_all_core_options.py
+deploy/replayos/silence_power_warnings.py
+deploy/replayos/neutralize_tamper_response.py

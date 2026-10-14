@@ -3,7 +3,14 @@
 Python implementation of the RGB-Pi media player, intended to run from the RGB-Pi
 ports directory.
 
-## Expected install path
+> **Running on RePlayOS with the RGB-Pi 2 HDMI DAC?** Use the dedicated
+> one-command installer and guide in
+> [`deploy/replayos/README.md`](deploy/replayos/README.md). The paths and launch
+> flow below describe the legacy RGB-Pi OS 4 layout and do not apply there
+> (RePlayOS install path is `/opt/rgbpi_mediaplayer`, launched from the
+> Alpha Player main-menu tile, with 15 kHz CRT safety built in).
+
+## Expected install path (RGB-Pi OS 4)
 
 ```bash
 /media/sd/roms/ports/rgbpi_mediaplayer
