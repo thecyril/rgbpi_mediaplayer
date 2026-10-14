@@ -311,8 +311,9 @@ would have to drop unattended reconnect and prompt for the password each boot
 
 **Symptom:** a reboot (or power cut) *during playback* bricked the player. Every
 launch after it exited `rc=1` before drawing anything and the launcher bounced
-straight back to RePlay — no socket, no state file, so every health probe said
-`healthy: false`. The real cause was in the python launch log:
+straight back to the OS frontend (RGB-Pi UI on OS4, RePlay on RePlayOS) — no
+socket, no state file, so every health probe said `healthy: false`. The real
+cause was in the python launch log:
 
 ```
 File ".../core/persistence.py", line 26, in load
@@ -353,7 +354,8 @@ stderr launch log.
 
 **Recovery on an already-bricked Pi:** just `git pull` the fix — the corrupt file
 is detected and quarantined automatically on the next launch. To check afterwards:
-`ls /opt/rgbpi_mediaplayer/state/*.bad`. The quarantined file's settings (resume
+`ls <app dir>/state/*.bad` (RGB-Pi OS4: `/media/sd/roms/ports/rgbpi_mediaplayer`,
+RePlayOS: `/opt/rgbpi_mediaplayer`). The quarantined file's settings (resume
 points, or the Plex link if it was `plex_state.json`) are the only thing lost.
 
 ## DVD title picker (mpv can't navigate DVD menus)
