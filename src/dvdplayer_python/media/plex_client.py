@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import socket
 import time
@@ -13,6 +12,7 @@ from xml.etree import ElementTree as ET
 import requests
 
 from dvdplayer_python.core.debuglog import log_event
+from dvdplayer_python.core.jsonstore import read_json, write_json
 
 
 PLEX_PRODUCT_NAME = "DVD Mediaplayer"
@@ -85,17 +85,17 @@ class PlexClient:
         self._load()
 
     def _load(self):
-        if self.state_path.is_file():
-            self.state.update(json.loads(self.state_path.read_text(encoding="utf-8")))
-        if self.cache_path.is_file():
-            self.cache.update(json.loads(self.cache_path.read_text(encoding="utf-8")))
+        # Runs from App.__init__: a state file truncated by a power cut must
+        # cost the Plex login at worst, not the whole player (see jsonstore).
+        self.state.update(read_json(self.state_path, {}, expect=dict))
+        self.cache.update(read_json(self.cache_path, {}, expect=dict))
         self._save_state()
 
     def _save_state(self):
-        self.state_path.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+        write_json(self.state_path, self.state)
 
     def _save_cache(self):
-        self.cache_path.write_text(json.dumps(self.cache, indent=2), encoding="utf-8")
+        write_json(self.cache_path, self.cache)
 
     def _headers(self, token: Optional[str] = None):
         headers = {
