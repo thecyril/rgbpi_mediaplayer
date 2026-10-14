@@ -19,6 +19,7 @@ from typing import Optional
 import pygame
 
 from dvdplayer_python.control.server import ControlServer
+from dvdplayer_python.core import platform as host_platform
 from dvdplayer_python.core.debuglog import log_event, log_path
 from dvdplayer_python.core.jsonstore import write_text_atomic
 from dvdplayer_python.core.models import (
@@ -278,6 +279,8 @@ class App:
         self._autostart_youtube_receiver()
         log_event(
             "app_init",
+            platform=self.renderer.platform.name,
+            platform_detected_by=self.renderer.platform.detected_by,
             app_dir=str(self.app_dir),
             state_dir=str(self.state_dir),
             control_socket=CONTROL_API_SOCKET,
@@ -323,7 +326,11 @@ class App:
                 # During playback mpv owns the DRM screen and all overlays are
                 # drawn via mpv's OSD, so the pygame UI render is invisible —
                 # skip it to free CPU for the real-time decode/USB-audio path.
-                if not (self.playback is not None and self.screen == Screen.PLAYBACK):
+                # Also skip while the display is released for an mpv spawn
+                # (release_display) — there is nothing to draw onto.
+                if pygame.display.get_init() and not (
+                    self.playback is not None and self.screen == Screen.PLAYBACK
+                ):
                     self._draw()
                 # Status export for the control API: 5 Hz is plenty and avoids
                 # hammering the SD card 30x/s (the IO starves the audio pipeline).
@@ -374,6 +381,7 @@ class App:
         except Exception as exc:
             log_event("playback_force_cleanup_failed", reason=reason, error=str(exc))
         self.playback = None
+        self.renderer.reacquire_display()
         self.playback_source = None
         self.playback_bookmark_key = None
         self._reset_playback_overlay_state()
@@ -622,6 +630,10 @@ class App:
             self.open_youtube_link()
 
     def _pump_pygame(self):
+        # The display is released while mpv plays (see start_playback); the
+        # pygame event queue needs the video subsystem, so skip pumping then.
+        if not pygame.display.get_init():
+            return
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 log_event("pygame_quit_event", ignored=IGNORE_PYGAME_QUIT)
@@ -1751,6 +1763,8 @@ class App:
         native passthrough the displayed format follows the source codec.
         """
         mode = str(getattr(self.playback, "audio_mode", "jack")) if self.playback else "jack"
+        if mode == "hdmi":
+            return "HDMI (STEREO)"
         if mode == "dolby51":
             return "DOLBY DIGITAL 5.1 (OPTICAL)"
         if mode == "pcm_stereo":
@@ -2520,6 +2534,14 @@ class App:
                 self._finish_dvd_titles(payload, result, error)
             elif event == "playback_start_done":
                 self._finish_playback_start(payload, result, error)
+            elif event == "release_display":
+                # Marshalled from _release_display_for_mpv (worker thread):
+                # SDL video calls must run here, on the main thread.
+                self.renderer.release_display()
+                payload.set()
+            elif event == "playback_start_cancelled":
+                if self._pending_playback is None and self.playback is None:
+                    self.renderer.reacquire_display()
 
     def _finish_network_scan(self, payload, hosts, error: Optional[str]):
         if isinstance(payload, dict):
@@ -3038,6 +3060,22 @@ class App:
             daemon=True,
         ).start()
 
+    def _release_display_for_mpv(self):
+        """PlaybackSession ``before_spawn`` hook, called on the worker thread.
+
+        mpv drives the CRT itself (--vo=drm) and needs DRM master, which the
+        SDL/KMSDRM window holds. The release keeps the BUSY screen visible for
+        the whole (slow) probe phase and only drops the window right before
+        mpv spawns. SDL video calls must run on the main thread, so marshal
+        the release there and wait for it. Gamepad input survives (raw evdev
+        js0 thread); the display is re-created in stop_playback/cleanup or on
+        a failed/cancelled start.
+        """
+        done = threading.Event()
+        self.background_queue.put(("release_display", done, None, None))
+        if not done.wait(timeout=5.0):
+            log_event("display_release_timeout")
+
     def _playback_start_worker(self, source: PlaybackSource, prefs, token: int):
         """Worker thread: bring up the (potentially slow) playback session.
 
@@ -3049,10 +3087,20 @@ class App:
             session = PlaybackSession.start(
                 self.app_dir, source, prefs,
                 cancelled=lambda: self._playback_start_token != token,
+                # RePlayOS only: on OS4 mpv overlays the CRT and the UI window
+                # stays up, so there is nothing to release.
+                before_spawn=(
+                    self._release_display_for_mpv
+                    if self.renderer.platform.release_display_for_playback
+                    else None
+                ),
             )
             self.background_queue.put(("playback_start_done", token, session, None))
         except PlaybackCancelled:
             log_event("playback_start_aborted", title=source.title)
+            # The display may already have been dropped for the spawn —
+            # give it back (main thread decides; no-op if a newer start owns it).
+            self.background_queue.put(("playback_start_cancelled", token, None, None))
         except Exception as exc:
             self.background_queue.put(("playback_start_done", token, None, str(exc)))
 
@@ -3067,10 +3115,15 @@ class App:
                     session.quit()
                 except Exception:
                     pass
+            # The orphan spawn may have taken the SDL display down with it;
+            # give it back unless a newer start (or live session) owns it.
+            if self._pending_playback is None and self.playback is None:
+                self.renderer.reacquire_display()
             return
         self._pending_playback = None
         self._clear_busy()
         if error or session is None:
+            self.renderer.reacquire_display()
             self.message = MessageBox("PLAYBACK", f"Playback failed: {error}")
             self._return_from_failed_playback()
             log_event("playback_start_failed", error=error)
@@ -3148,6 +3201,7 @@ class App:
         if self.playback:
             self.playback.quit()
         self.playback = None
+        self.renderer.reacquire_display()
         self.playback_source = None
         self._reset_playback_overlay_state()
         self.playback_bookmark_key = None
@@ -3721,7 +3775,12 @@ class App:
         return "ON (inaudible)" if bool(getattr(self.playback_state.prefs, "ntsc_speedup", True)) else "OFF"
 
     def _audio_output_label(self, value: str) -> str:
-        return "OPTICAL 5.1 (Q990D)" if str(value).lower() in {"optical_5_1", "optical"} else "JACK 3.5MM"
+        raw = str(value).lower()
+        if raw in {"optical_5_1", "optical"}:
+            return "OPTICAL 5.1 (Q990D)"
+        if raw == "hdmi" and "hdmi" in self.renderer.platform.audio_outputs:
+            return "HDMI (RGB-PI 2)"
+        return "JACK 3.5MM"
 
     def _audio_output_subtitle(self) -> str:
         return self._audio_output_label(getattr(self.playback_state.prefs, "audio_output", "jack"))
@@ -3859,8 +3918,17 @@ class App:
             log_event("settings_ntsc_speedup", enabled=next_value, via=action.value)
             return True
         if item.kind == "settings_audio_output":
-            # RIGHT = optical 5.1, LEFT = jack. Two-value toggle.
-            next_value = "optical_5_1" if action == Action.RIGHT else "jack"
+            order = list(self.renderer.platform.audio_outputs)
+            if len(order) == 2:
+                # OS4: RIGHT = optical 5.1, LEFT = jack. Two-value toggle.
+                next_value = order[1] if action == Action.RIGHT else order[0]
+            else:
+                # RePlayOS: LEFT/RIGHT cycles through the available outputs.
+                current = str(getattr(self.playback_state.prefs, "audio_output", "jack") or "jack").lower()
+                if current not in order:
+                    current = "jack"
+                step = 1 if action == Action.RIGHT else -1
+                next_value = order[(order.index(current) + step) % len(order)]
             self.playback_state.prefs.audio_output = next_value
             self.playback_state.write_prefs()
             self._refresh_settings_items()

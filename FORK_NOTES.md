@@ -1,5 +1,10 @@
 # Fork notes — `thecyril/rgbpi_mediaplayer`
 
+> These notes document the **RGB-Pi OS 4** (bullseye) deployment. For
+> **RePlayOS** (RGB-Pi 2 HDMI DAC), see `deploy/replayos/README.md` — paths,
+> display pipeline and audio routing differ substantially. Both run from the
+> same `main`: see [Two platforms, one codebase](#two-platforms-one-codebase-coreplatformpy).
+
 Living document. Track everything this fork carries on top of
 [`joeblack2k/rgbpi_mediaplayer`](https://github.com/joeblack2k/rgbpi_mediaplayer) — why each change exists, what is upstream-pending vs. local-only, and how to operate the dev workflow.
 
@@ -8,6 +13,38 @@ Hardware target this fork is tuned for:
 Most defaults assume that pipeline; anything that hurts a 1080p LCD pipeline is gated behind a config flag (see [Reverting per-user](#reverting-per-user)).
 
 ---
+
+## Two platforms, one codebase (`core/platform.py`)
+
+`main` runs on both **RGB-Pi OS 4** (GPIO DPI/VGA666, `VGA-1`) and **RePlayOS**
+(RGB-Pi 2 HDMI DAC, `HDMI-A-1`). There is no per-platform branch any more.
+
+- **Auto-detected**, nothing to configure: RePlayOS = `/opt/replay/replay`
+  exists (RePlay's own frontend binary); anything else = OS4. A detection
+  failure therefore always lands on OS4 behaviour. `DVDPLAYER_PLATFORM=os4|replayos`
+  forces it (debug only). The choice is logged as `app_init platform=…`.
+- **Every** behaviour that differs and isn't already opt-in through its own
+  `DVDPLAYER_*` env var is decided in `core/platform.py` — today: UI canvas
+  size (RePlayOS scales the 320x240 UI to the wide CRT mode), releasing the
+  SDL window around playback, closing pygame's mixer, the HDMI choice in AUDIO
+  OUTPUT, and `--sws-scaler=fast-bilinear`. The RePlayOS display/DRM/audio env
+  vars (`DVDPLAYER_MPV_DRM_MODE*`, `DVDPLAYER_RUNTIME_LIBS=mpv-only`, …) are only
+  exported by `deploy/replayos/replay_launch.sh` and are inert on OS4.
+- **Proof** — `tests/platform_golden/`: runs the real app against fakes (pygame,
+  ffprobe, DRM, mpv child, no network) and records the full mpv command line +
+  env for 32 source/prefs cases, every display call around playback, the
+  SETTINGS menu, the AUDIO OUTPUT cycle and the launcher env. The references
+  were frozen from the pre-merge code (`main` @ 563d2f9 for OS4, `replayos` @
+  8f453b7 for RePlayOS). Before any merge/deploy:
+
+  ```bash
+  python3 tests/platform_golden/check.py   # both must say "identical"
+  python3 -m unittest discover -s tests -p 'test_*.py'
+  ```
+
+  A diff means a change touched a platform's behaviour. If that is intended,
+  `check.py --update`, review the diff and commit the new reference with it.
+  CI runs both on every push (`.github/workflows/tests.yml`, Python 3.9 = OS4).
 
 ## Workflow
 
@@ -407,9 +444,9 @@ Some setup steps had to be done in-place on the Pi (no Python code involved). Th
 - `apt-get install -y --no-install-recommends libdvdcss2` — CSS decryption for **encrypted commercial DVDs**. libdvdread (used by both `lsdvd` and mpv) dlopen's `libdvdcss.so.2` at runtime; without it lsdvd warns "No css library" and mpv can read the title list but **cannot decrypt the movie's VOBs** — so `dvd://N` plays only the (unencrypted) menu, which looks like "the menu appears but nothing else plays". Installing libdvdcss fixes playback of encrypted discs. Targeted install only.
 - `state/plex_state.json` — written by the player after a PIN link, sometimes records a `plex.direct` URI for a stale machine identifier (Plex.tv keeps resolving old MAC-style server IDs in its `/api/v2/resources` response). When that happens, hand-edit the file to set:
   ```json
-  "server_uri": "http://192.168.1.3:32400"
+  "server_uri": "http://<your-plex-server-lan-ip>:32400"
   ```
-  pointing at the current LAN IP of the active Plex server (machine identifier `cfd904f5…` for this setup).
+  pointing at the current LAN IP of your active Plex server.
 - `/etc/asound.conf` — bypass-EQ base config (`pcm.!default → plug → sysdefault:0`) **plus** the `dolby51` device used for optical 5.1 (a52 software AC3 → UT23). Backup of the pre-5.1 state: `/etc/asound.conf.backup-pre-a52`. The earlier equaliser config (`/etc/asound.conf.backup-pre-godot-fix`) caused xruns on the kernel-6.1 ALSA stack and was reverted.
 - **Optical 5.1 audio setup** (mandatory for the OPTICAL 5.1 output mode; full walkthrough in `rgbpi-5.1-dolby-digital-audio-guide.md`):
   - `apt-get install -y --no-install-recommends libasound2-plugins:arm64` — the `a52` ALSA plugin shipped only as armhf (32-bit) on this image, unusable by the arm64 mpv/Kodi. **Targeted install only — never `apt upgrade`** (that broke the kernel once).

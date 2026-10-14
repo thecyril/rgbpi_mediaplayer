@@ -1,0 +1,2216 @@
+# platform golden — replayos
+
+### launcher (exit=0)
+  DVDPLAYER_ALSA_DEVICE=default:CARD=vc4hdmi0
+  DVDPLAYER_APP_DIR=<APP>
+  DVDPLAYER_CONTROL_SOCKET=<APP>/state/runtime/rgbpi-dvdplayer-api.sock
+  DVDPLAYER_DEBUG_LOG=<APP>/state/runtime/rgbpi-dvdplayer-python.log
+  DVDPLAYER_DISPLAY_H=240
+  DVDPLAYER_DISPLAY_W=2560
+  DVDPLAYER_DRM_CONNECTOR=HDMI-A-1
+  DVDPLAYER_MPV_BIN=<APP>/bin/mpv
+  DVDPLAYER_MPV_DRM_MODE=2560x240
+  DVDPLAYER_MPV_DRM_MODE_NTSC=2560x480
+  DVDPLAYER_MPV_DRM_MODE_PAL=2560x576
+  DVDPLAYER_MPV_LD_LIBRARY_PATH=<APP>/runtime/linux-arm64-rootfs/lib/aarch64-linux-gnu:<APP>/runtime/linux-arm64-rootfs/usr/lib/aarch64-linux-gnu:<APP>/runtime/linux-arm64-rootfs/usr/lib/aarch64-linux-gnu/pulseaudio:<APP>/runtime/linux-arm64-rootfs/usr/lib/aarch64-linux-gnu/samba
+  DVDPLAYER_MPV_LOG=<APP>/state/runtime/rgbpi-dvdplayer-mpv.log
+  DVDPLAYER_RUNTIME_LIBS=mpv-only
+  DVDPLAYER_STATE_PATH=<APP>/state/runtime/rgbpi-dvdplayer-state.json
+  LD_LIBRARY_PATH=<APP>/lib
+  PYTHONPATH=<APP>/src
+  SDL_AUDIODRIVER=alsa
+  SDL_VIDEODRIVER=kmsdrm
+  XDG_RUNTIME_DIR=/tmp
+
+### app init
+  ui: pygame.init
+  ui: mixer.quit
+  ui: display.set_mode (2560, 240) fullscreen=True
+  ui: mouse.set_visible False
+  ui(draw): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(draw): display.flip
+
+### settings menu
+  settings_crt_motion: CRT MOTION | SMOOTH TV
+  settings_cable_smooth_preset: CABLE SMOOTH PRESET | Apply 1999 cable profile
+  settings_pal_speedup: 24P SMOOTHING | ON (+4% audio)
+  settings_ntsc_speedup: 30P SMOOTHING | ON (inaudible)
+  settings_default_mode: DEFAULT MODE | 60HZ (480I)
+  settings_volume_normalization: VOLUME NORMALIZATION | LIGHT
+  settings_audio_output: AUDIO OUTPUT | JACK 3.5MM
+  settings_aspect_mode: 4:3 MODE | OFF
+  settings_deinterlace_mode: DEINTERLACE | WEAVE
+  settings_reset_plex_link: RESET PLEX LINK | Require relink
+  settings_youtube_link: YOUTUBE LINK WITH CODE | Start TV code pairing
+  settings_unlink_youtube: UNLINK YOUTUBE | Reset TV pairing
+  settings_runtime_install: RUNTIME CHECK | Bundled MPV + libdvdcss
+
+### audio output subtitle per stored pref
+  jack -> JACK 3.5MM
+  optical_5_1 -> OPTICAL 5.1 (Q990D)
+  optical -> OPTICAL 5.1 (Q990D)
+  hdmi -> HDMI (RGB-PI 2)
+  bogus -> JACK 3.5MM
+
+### audio output cycle
+  from jack: right -> optical_5_1
+  from hdmi: right -> jack
+  right -> optical_5_1 (OPTICAL 5.1 (Q990D))
+  right -> hdmi (HDMI (RGB-PI 2))
+  right -> jack (JACK 3.5MM)
+  right -> optical_5_1 (OPTICAL 5.1 (Q990D))
+   left -> jack (JACK 3.5MM)
+   left -> hdmi (HDMI (RGB-PI 2))
+   left -> optical_5_1 (OPTICAL 5.1 (Q990D))
+   left -> jack (JACK 3.5MM)
+
+### case film_1080p / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/film_1080p_23976_ac3.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}film_1080p_23976_ac3.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case film_1080p / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=passthrough effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-spdif=ac3,dts
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/film_1080p_23976_ac3.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}film_1080p_23976_ac3.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case uhd_hevc / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/uhd_2160p_hevc_truehd.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}uhd_2160p_hevc_truehd.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case uhd_hevc / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=ac3_transcode effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-channels=5.1
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --af-add=lavcac3enc=bitrate=640
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/uhd_2160p_hevc_truehd.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}uhd_2160p_hevc_truehd.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_576i / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_576i_tff_mp2.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_576i_tff_mp2.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_576i / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=pcm_stereo effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/hw:CARD=Tx,DEV=0
+    --audio-samplerate=48000
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_576i_tff_mp2.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_576i_tff_mp2.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case ntsc_480i / prefs=default
+  session: target_mode=720x480i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.2500000
+    --speed=1.001000
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x480
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/ntsc_480i_tff_ac3.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}ntsc_480i_tff_ac3.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case ntsc_480i / prefs=optical
+  session: target_mode=720x480i backend_profile=drm audio_mode=pcm_stereo effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/hw:CARD=Tx,DEV=0
+    --audio-samplerate=48000
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.2500000
+    --speed=1.001000
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x480
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/ntsc_480i_tff_ac3.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}ntsc_480i_tff_ac3.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case anime_24p_as_2997 / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/anime_24p_labelled_2997.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}anime_24p_labelled_2997.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case anime_24p_as_2997 / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=pcm_stereo effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/hw:CARD=Tx,DEV=0
+    --audio-samplerate=48000
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/anime_24p_labelled_2997.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}anime_24p_labelled_2997.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_25p / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_25p_progressive_aac.mp4
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_25p_progressive_aac.mp4\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_25p / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=pcm_stereo effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/hw:CARD=Tx,DEV=0
+    --audio-samplerate=48000
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_25p_progressive_aac.mp4
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_25p_progressive_aac.mp4\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case sport_720p50 / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/sport_720p50_flac51.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}sport_720p50_flac51.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case sport_720p50 / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=ac3_transcode effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-channels=5.1
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --af-add=lavcac3enc=bitrate=640
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/sport_720p50_flac51.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}sport_720p50_flac51.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case tv_1080i25 / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/tv_1080i25_dts.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}tv_1080i25_dts.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case tv_1080i25 / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=passthrough effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-spdif=ac3,dts
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/tv_1080i25_dts.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}tv_1080i25_dts.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case plex_film / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    http://192.0.2.10:32400/library/parts/1/file.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}Plex Film\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case plex_film / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=passthrough effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-spdif=ac3,dts
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    http://192.0.2.10:32400/library/parts/1/file.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}Plex Film\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_iso_title3 / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=/media/sd/roms/dvd/MOVIE.iso
+    dvd://2
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}MOVIE\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_iso_title3 / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=passthrough effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-spdif=ac3,dts
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=/media/sd/roms/dvd/MOVIE.iso
+    dvd://2
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}MOVIE\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_folder_root / prefs=default
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=<TMP>/media/DVD_FOLDER
+    dvdnav://
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}DVD_FOLDER\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_folder_root / prefs=optical
+  session: target_mode=720x576i backend_profile=drm audio_mode=ac3_transcode effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --ao=alsa
+    --audio-device=alsa/iec958:CARD=Tx,DEV=0
+    --audio-channels=5.1
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavcac3enc=bitrate=640
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=<TMP>/media/DVD_FOLDER
+    dvdnav://
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}DVD_FOLDER\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case film_1080p / prefs=50hz+bob
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/film_1080p_23976_ac3.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}film_1080p_23976_ac3.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_576i / prefs=50hz+bob
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --vf-add=bwdif=mode=send_field:parity=auto:deint=interlaced
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_576i_tff_mp2.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_576i_tff_mp2.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case ntsc_480i / prefs=50hz+bob
+  session: target_mode=720x480i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --vf-add=bwdif=mode=send_field:parity=auto:deint=interlaced
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.2500000
+    --speed=1.001000
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x480
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/ntsc_480i_tff_ac3.ts
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}ntsc_480i_tff_ac3.ts\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case anime_24p_as_2997 / prefs=50hz+bob
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/anime_24p_labelled_2997.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}anime_24p_labelled_2997.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_iso_title3 / prefs=50hz+bob
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --vf-add=bwdif=mode=send_field:parity=auto:deint=interlaced
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=/media/sd/roms/dvd/MOVIE.iso
+    dvd://2
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}MOVIE\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case film_1080p / prefs=zoom+nonorm+nospeedup
+  session: target_mode=720x480i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --panscan=1.0
+    --monitorpixelaspect=0.2500000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x480
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/film_1080p_23976_ac3.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}film_1080p_23976_ac3.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case pal_25p / prefs=zoom+nonorm+nospeedup
+  session: target_mode=720x576i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --panscan=1.0
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/pal_25p_progressive_aac.mp4
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}pal_25p_progressive_aac.mp4\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case plex_film / prefs=zoom+nonorm+nospeedup
+  session: target_mode=720x480i backend_profile=drm audio_mode=jack effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --panscan=1.0
+    --monitorpixelaspect=0.2500000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x480
+    --sws-scaler=fast-bilinear
+    http://192.0.2.10:32400/library/parts/1/file.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}Plex Film\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case film_1080p / prefs=stale_hdmi_pref
+  session: target_mode=720x576i backend_profile=drm audio_mode=hdmi effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --af=lavfi=[acompressor=threshold=-16dB:ratio=2:attack=20:release=250:makeup=2]
+    --monitorpixelaspect=0.3000000
+    --speed=1.042708
+    --audio-pitch-correction=no
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    /media/nas/Movies/film_1080p_23976_ac3.mkv
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}film_1080p_23976_ac3.mkv\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
+### case dvd_folder_root / prefs=stale_hdmi_pref
+  session: target_mode=720x576i backend_profile=drm audio_mode=hdmi effective_mode=None degraded=True
+  spawn[0] argv:
+    <APP>/bin/mpv
+    --fs
+    --no-osc
+    --input-default-bindings=no
+    --audio-channels=stereo
+    --ao=alsa
+    --audio-device=alsa/default:CARD=vc4hdmi0
+    --osd-level=0
+    --osd-align-x=center
+    --osd-align-y=center
+    --osd-font-size=36
+    --osd-margin-y=0
+    --sub-auto=no
+    --sub-font-size=63
+    --sub-scale=1.00
+    --sub-margin-y=43
+    --sub-border-size=4
+    --sub-color=#FFF6EC
+    --sub-border-color=#2C1204
+    --hwdec=auto-safe
+    --deband=no
+    --interpolation=no
+    --video-sync=audio
+    --tscale=box
+    --sigmoid-upscaling=no
+    --scale=bilinear
+    --cscale=bilinear
+    --dscale=bilinear
+    --input-ipc-server=/tmp/rgbpi-dvdplayer-ipc-<N>.sock
+    --idle=no
+    --force-window=no
+    --keep-open=no
+    --alang=auto
+    --slang=auto
+    --audio-display=no
+    --cache=yes
+    --demuxer-max-bytes=1GiB
+    --demuxer-readahead-secs=60
+    --vd-lavc-threads=0
+    --deinterlace=no
+    --monitorpixelaspect=0.3000000
+    --vo=drm
+    --drm-connector=0.HDMI-A-1
+    --drm-mode=2560x576
+    --sws-scaler=fast-bilinear
+    --dvd-device=<TMP>/media/DVD_FOLDER
+    dvdnav://
+  spawn[0] env LD_LIBRARY_PATH=<RUNTIME_LIBS>:<APP>/lib
+  ui(start): display.quit
+  ipc: ["set_property", "volume", 72.0]
+  ipc: ["get_property", "pause"]
+  ipc: ["get_property", "time-pos"]
+  ipc: ["get_property", "duration"]
+  ipc: ["get_property", "osd-width"]
+  ipc: ["get_property", "osd-height"]
+  ipc: ["osd-overlay", 7, "ass-events", "{\\an7\\pos(0,524)\\bord0\\shad0\\1c&H000000&\\1a&HA0&\\p1}m 0 0 l 1280 0 1280 154 0 154{\\p0}\n{\\an7\\pos(80,552)\\fs36\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}DVD_FOLDER\n{\\an9\\pos(1200,552)\\fs44\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}\u25b6\n{\\an7\\pos(80,624)\\bord0\\shad0\\1c&H808080&\\1a&H80&\\p1}m 0 0 l 1120 0 1120 12 0 12{\\p0}\n{\\an7\\pos(80,644)\\fs26\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}00:00 / --:--\n{\\an9\\pos(1200,644)\\fs22\\1c&HC0C0C0&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord2\\shad0}A pause/play   <- -> seek   START menu", 1280, 720, 0]
+  ipc: ["get_property", "track-list"]
+  ui(stop): display.init
+  ui(stop): display.set_mode (2560, 240) fullscreen=True
+  ui(stop): mouse.set_visible False
+  ui(stop): transform.scale offscreen(320, 240) -> (2560, 240) into=display
+  ui(stop): display.flip
+
